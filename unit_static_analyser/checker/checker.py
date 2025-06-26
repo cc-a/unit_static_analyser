@@ -1,0 +1,72 @@
+import ast
+from typing import Dict, Optional
+
+from ..units import types as units_mod
+
+
+class UnitChecker(ast.NodeVisitor):
+    def __init__(self):
+        self.units: Dict[str, type] = {}
+
+    def visit_AnnAssign(self, node: ast.AnnAssign):
+        if isinstance(node.target, ast.Name):
+            var_name = node.target.id
+            unit_cls = self._extract_unit_class_from_annotation(node.annotation)
+            if unit_cls:
+                self.units[var_name] = unit_cls
+
+    def visit_Assign(self, node: ast.Assign):
+        if isinstance(node.value, ast.BinOp):
+            left_var = node.value.left
+            right_var = node.value.right
+            op = node.value.op
+            if (
+                isinstance(left_var, ast.Name)
+                and isinstance(right_var, ast.Name)
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                left = left_var.id
+                right = right_var.id
+                target = node.targets[0].id
+                left_unit = self.units.get(left)
+                right_unit = self.units.get(right)
+                if isinstance(op, ast.Add):
+                    if left_unit and right_unit and left_unit != right_unit:
+                        raise TypeError(
+                            f"Cannot add {left} ({left_unit}) and {right} ({right_unit})"
+                        )
+                    self.units[target] = left_unit
+                elif isinstance(op, ast.Div):
+                    if left_unit and right_unit:
+                        result_unit = left_unit / right_unit
+                        self.units[target] = result_unit
+
+    def _extract_unit_class_from_annotation(
+        self, annotation: ast.AST
+    ) -> Optional[type]:
+        # Similar to previous version, updated for new import
+        if isinstance(annotation, ast.Subscript):
+            ann_id = (
+                annotation.value.id
+                if isinstance(annotation.value, ast.Name)
+                else (
+                    annotation.value.attr
+                    if isinstance(annotation.value, ast.Attribute)
+                    else None
+                )
+            )
+            if ann_id == "Quantity":
+                slice_value = annotation.slice
+                if isinstance(slice_value, ast.Tuple) and len(slice_value.elts) > 1:
+                    unit_elt = slice_value.elts[1]
+                    if isinstance(unit_elt, ast.Name):
+                        return getattr(units_mod, unit_elt.id, None)
+                    if isinstance(unit_elt, ast.Call):
+                        if (
+                            isinstance(unit_elt.func, ast.Name)
+                            and unit_elt.func.id == "type"
+                        ):
+                            expr = unit_elt.args[0]
+                            code = compile(ast.Expression(expr), "<string>", "eval")
+                            return eval(code, vars(units_mod))
+        return None
