@@ -3,7 +3,7 @@ import ast
 import pytest
 
 from unit_static_analyser.checker.checker import UnitChecker
-from unit_static_analyser.units.types import m, s
+from unit_static_analyser.units.units import m, s
 
 
 def test_assignment():
@@ -16,7 +16,7 @@ a: Annotated[int, m] = 1
     tree = ast.parse(code)
     checker = UnitChecker()
     checker.visit(tree)
-    assert checker.units["a"] is m
+    assert checker.units["a"] == m
 
 
 def test_addition_error():
@@ -47,7 +47,7 @@ c = a / b
     checker = UnitChecker()
     checker.visit(tree)
     assert "c" in checker.units
-    assert checker.units["c"] is m / s
+    assert checker.units["c"] == m / s
 
 
 def test_disallow_missing_units():

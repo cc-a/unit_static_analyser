@@ -2,7 +2,7 @@
 
 import ast
 
-from ..units import types as units_mod
+from .. import units as units_mod
 
 
 class UnitChecker(ast.NodeVisitor):
@@ -10,15 +10,15 @@ class UnitChecker(ast.NodeVisitor):
 
     def __init__(self) -> None:
         """Initialize the UnitChecker with an empty unit mapping."""
-        self.units: dict[str, type] = {}
+        self.units: dict[str, object] = {}
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         """Visit annotated assignments to extract unit information."""
         if isinstance(node.target, ast.Name):
             var_name = node.target.id
-            unit_cls = self._extract_unit_class_from_annotation(node.annotation)
-            if unit_cls is not None:
-                self.units[var_name] = unit_cls
+            unit_obj = self._extract_unit_from_annotation(node.annotation)
+            if unit_obj is not None:
+                self.units[var_name] = unit_obj
 
     def visit_Assign(self, node: ast.Assign) -> None:
         """Visit assignments to check unit operations and compatibility."""
@@ -54,18 +54,16 @@ class UnitChecker(ast.NodeVisitor):
             if isinstance(op, ast.Add):
                 if left_unit != right_unit:
                     raise TypeError(
-                        "Cannot add operands with different units: "
-                        f"{left_unit} and {right_unit}"
+                        f"Cannot add operands with different units: {left_unit} and {right_unit}"
                     )
                 self.units[target] = left_unit
             elif isinstance(op, ast.Div):
-                result_unit = left_unit / right_unit  # type: ignore
+                result_unit = left_unit / right_unit
                 self.units[target] = result_unit
 
-    def _extract_unit_class_from_annotation(self, annotation: ast.AST) -> type | None:
-        # Extract unit from typing.Annotated[<type>, <unit>]
+    def _extract_unit_from_annotation(self, annotation: ast.AST) -> object | None:
+        # Extract unit instance from typing.Annotated[<type>, <unit>]
         if isinstance(annotation, ast.Subscript):
-            # Accept both "Annotated" and "typing.Annotated"
             ann_id = (
                 annotation.value.id
                 if isinstance(annotation.value, ast.Name)
@@ -80,14 +78,11 @@ class UnitChecker(ast.NodeVisitor):
                 # For Python 3.9+, slice is an ast.Tuple; for older, may be ast.Index
                 if isinstance(slice_value, ast.Tuple) and len(slice_value.elts) > 1:
                     unit_elt = slice_value.elts[1]
+                    # Evaluate the unit instance from the annotation
                     if isinstance(unit_elt, ast.Name):
                         return getattr(units_mod, unit_elt.id, None)
                     if isinstance(unit_elt, ast.Call):
-                        if (
-                            isinstance(unit_elt.func, ast.Name)
-                            and unit_elt.func.id == "type"
-                        ):
-                            expr = unit_elt.args[0]
-                            code = compile(ast.Expression(expr), "<string>", "eval")
-                            return eval(code, vars(units_mod))
+                        # Support e.g. Annotated[int, m**2]
+                        code = compile(ast.Expression(unit_elt), "<string>", "eval")
+                        return eval(code, vars(units_mod))
         return None
