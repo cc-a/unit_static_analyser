@@ -26,32 +26,41 @@ class UnitChecker(ast.NodeVisitor):
             left_var = node.value.left
             right_var = node.value.right
             op = node.value.op
-            if (
-                isinstance(left_var, ast.Name)
-                and isinstance(right_var, ast.Name)
-                and isinstance(node.targets[0], ast.Name)
-            ):
+
+            # Only handle assignments to a variable
+            if not (isinstance(node.targets[0], ast.Name)):
+                return
+
+            target = node.targets[0].id
+
+            # Determine left unit
+            if isinstance(left_var, ast.Name):
                 left = left_var.id
-                right = right_var.id
-                target = node.targets[0].id
                 left_unit = self.units.get(left)
+            else:
+                left_unit = None
+
+            # Determine right unit
+            if isinstance(right_var, ast.Name):
+                right = right_var.id
                 right_unit = self.units.get(right)
-                if isinstance(op, ast.Add):
-                    if (
-                        left_unit is not None
-                        and right_unit is not None
-                        and left_unit != right_unit
-                    ):
-                        raise TypeError(
-                            f"Cannot add {left} ({left_unit}) and {right}"
-                            f" ({right_unit})"
-                        )
-                    if left_unit is not None:
-                        self.units[target] = left_unit
-                elif isinstance(op, ast.Div):
-                    if left_unit is not None and right_unit is not None:
-                        result_unit = left_unit / right_unit  # type: ignore
-                        self.units[target] = result_unit
+            else:
+                right_unit = None
+
+            # If either operand is missing a unit, raise TypeError
+            if left_unit is None or right_unit is None:
+                raise TypeError("Operands must both have units")
+
+            if isinstance(op, ast.Add):
+                if left_unit != right_unit:
+                    raise TypeError(
+                        "Cannot add operands with different units: "
+                        f"{left_unit} and {right_unit}"
+                    )
+                self.units[target] = left_unit
+            elif isinstance(op, ast.Div):
+                result_unit = left_unit / right_unit  # type: ignore
+                self.units[target] = result_unit
 
     def _extract_unit_class_from_annotation(self, annotation: ast.AST) -> type | None:
         # Similar to previous version, updated for new import

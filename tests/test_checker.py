@@ -45,3 +45,16 @@ c = a / b
     checker.visit(tree)
     assert "c" in checker.units
     assert checker.units["c"] is m / s
+
+
+def test_disallow_missing_units():
+    """Test that operations involving variables without units raise a TypeError."""
+    code = """
+from units.types import Quantity, m
+a: Quantity[int, m] = 1
+b = a + 4
+"""
+    tree = ast.parse(code)
+    checker = UnitChecker()
+    with pytest.raises(TypeError):
+        checker.visit(tree)
