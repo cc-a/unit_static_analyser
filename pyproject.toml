@@ -2,9 +2,7 @@
 name = "unit_static_analyser"
 version = "0.1.0"
 description = "Add units and physical quantities to Python with static analysis"
-authors = [
-    {name = "Christopher Cave-Ayland", email = "c.cave-ayland@imperial.ac.uk"}
-]
+authors = [{name = "Christopher Cave-Ayland", email = "c.cave-ayland@imperial.ac.uk"}]
 
 [tool.poetry.dependencies]
 python = "^3.13"

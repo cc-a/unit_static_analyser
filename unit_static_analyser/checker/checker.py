@@ -1,21 +1,27 @@
+"""UnitChecker module."""
+
 import ast
-from typing import Dict, Optional
 
 from ..units import types as units_mod
 
 
 class UnitChecker(ast.NodeVisitor):
-    def __init__(self):
-        self.units: Dict[str, type] = {}
+    """A static analysis visitor to check unit compatibility in Python code."""
 
-    def visit_AnnAssign(self, node: ast.AnnAssign):
+    def __init__(self) -> None:
+        """Initialize the UnitChecker with an empty unit mapping."""
+        self.units: dict[str, type] = {}
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        """Visit annotated assignments to extract unit information."""
         if isinstance(node.target, ast.Name):
             var_name = node.target.id
             unit_cls = self._extract_unit_class_from_annotation(node.annotation)
-            if unit_cls:
+            if unit_cls is not None:
                 self.units[var_name] = unit_cls
 
-    def visit_Assign(self, node: ast.Assign):
+    def visit_Assign(self, node: ast.Assign) -> None:
+        """Visit assignments to check unit operations and compatibility."""
         if isinstance(node.value, ast.BinOp):
             left_var = node.value.left
             right_var = node.value.right
@@ -31,19 +37,23 @@ class UnitChecker(ast.NodeVisitor):
                 left_unit = self.units.get(left)
                 right_unit = self.units.get(right)
                 if isinstance(op, ast.Add):
-                    if left_unit and right_unit and left_unit != right_unit:
+                    if (
+                        left_unit is not None
+                        and right_unit is not None
+                        and left_unit != right_unit
+                    ):
                         raise TypeError(
-                            f"Cannot add {left} ({left_unit}) and {right} ({right_unit})"
+                            f"Cannot add {left} ({left_unit}) and {right}"
+                            f" ({right_unit})"
                         )
-                    self.units[target] = left_unit
+                    if left_unit is not None:
+                        self.units[target] = left_unit
                 elif isinstance(op, ast.Div):
-                    if left_unit and right_unit:
-                        result_unit = left_unit / right_unit
+                    if left_unit is not None and right_unit is not None:
+                        result_unit = left_unit / right_unit  # type: ignore
                         self.units[target] = result_unit
 
-    def _extract_unit_class_from_annotation(
-        self, annotation: ast.AST
-    ) -> Optional[type]:
+    def _extract_unit_class_from_annotation(self, annotation: ast.AST) -> type | None:
         # Similar to previous version, updated for new import
         if isinstance(annotation, ast.Subscript):
             ann_id = (

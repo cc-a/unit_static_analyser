@@ -1,6 +1,7 @@
 import ast
 
 import pytest
+
 from unit_static_analyser.checker.checker import UnitChecker
 from unit_static_analyser.units.types import m, s
 
