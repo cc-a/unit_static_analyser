@@ -63,8 +63,9 @@ class UnitChecker(ast.NodeVisitor):
                 self.units[target] = result_unit
 
     def _extract_unit_class_from_annotation(self, annotation: ast.AST) -> type | None:
-        # Similar to previous version, updated for new import
+        # Extract unit from typing.Annotated[<type>, <unit>]
         if isinstance(annotation, ast.Subscript):
+            # Accept both "Annotated" and "typing.Annotated"
             ann_id = (
                 annotation.value.id
                 if isinstance(annotation.value, ast.Name)
@@ -74,8 +75,9 @@ class UnitChecker(ast.NodeVisitor):
                     else None
                 )
             )
-            if ann_id == "Quantity":
+            if ann_id == "Annotated":
                 slice_value = annotation.slice
+                # For Python 3.9+, slice is an ast.Tuple; for older, may be ast.Index
                 if isinstance(slice_value, ast.Tuple) and len(slice_value.elts) > 1:
                     unit_elt = slice_value.elts[1]
                     if isinstance(unit_elt, ast.Name):
