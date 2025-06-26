@@ -3,10 +3,11 @@
 Unit Static Analyser is a Python library designed to integrate units and physical quantities into Python code with static analysis. It is designed to be compatible for use with static typing tools.
 
 ```python
-from units.types import Quantity, m, s
+from typing import Annotated
+from units.types import m, s
 
-distance: Quantity[int, m] = 100
-time: Quantity[int, s] = 20
+distance: Annotated[int, m] = 100
+time: Annotated[int, s] = 20
 speed = distance / time  # Automatically computes units as m/s
 distance + time # disallowed
 ```
