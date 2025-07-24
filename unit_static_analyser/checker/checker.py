@@ -5,12 +5,25 @@ import ast
 from .. import units as units_mod
 
 
+class UnitCheckerError:
+    """Represents a unit checking error."""
+
+    def __init__(self, code: str, lineno: int, message: str):
+        self.code = code
+        self.lineno = lineno
+        self.message = message
+
+    def __repr__(self):
+        return f"UnitCheckerError(code={self.code!r}, lineno={self.lineno!r}, message={self.message!r})"
+
+
 class UnitChecker(ast.NodeVisitor):
     """A static analysis visitor to check unit compatibility in Python code."""
 
     def __init__(self) -> None:
-        """Initialize the UnitChecker with an empty unit mapping."""
+        """Initialize the UnitChecker with an empty unit mapping and error list."""
         self.units: dict[str, object] = {}
+        self.errors: list[UnitCheckerError] = []
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         """Visit annotated assignments to extract unit information."""
@@ -39,7 +52,6 @@ class UnitChecker(ast.NodeVisitor):
                 left_unit = self.units.get(left)
             else:
                 left_unit = None
-
             # Determine right unit
             if isinstance(right_var, ast.Name):
                 right = right_var.id
@@ -47,15 +59,27 @@ class UnitChecker(ast.NodeVisitor):
             else:
                 right_unit = None
 
-            # If either operand is missing a unit, raise TypeError
+            # If either operand is missing a unit, collect error
             if left_unit is None or right_unit is None:
-                raise TypeError("Operands must both have units")
+                self.errors.append(
+                    UnitCheckerError(
+                        code="U002",
+                        lineno=node.lineno,
+                        message="Operands must both have units",
+                    )
+                )
+                return
 
             if isinstance(op, ast.Add):
                 if left_unit != right_unit:
-                    raise TypeError(
-                        f"Cannot add operands with different units: {left_unit} and {right_unit}"
+                    self.errors.append(
+                        UnitCheckerError(
+                            code="U001",
+                            lineno=node.lineno,
+                            message=f"Cannot add operands with different units: {left_unit} and {right_unit}",
+                        )
                     )
+                    return
                 self.units[target] = left_unit
             elif isinstance(op, ast.Div):
                 result_unit = left_unit / right_unit
