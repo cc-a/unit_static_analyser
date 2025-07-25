@@ -109,3 +109,36 @@ def f():
         c = a + b
 """)
     assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
+
+def test_class_scope():
+    """Test that class variables are scoped correctly and can be accessed."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    a: Annotated[int, "m"]
+""")
+    assert checker.units["A.a"] == m_unit
+
+def test_class_variable_lookup():
+    """Test that class variables can be accessed and used in expressions."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    a: Annotated[int, "m"]
+b: Annotated[int, "m"]
+c = A.a + b
+"""
+    )
+    assert checker.units["c"] == m_unit
+
+def test_class_variable_lookup_nested():
+    """Test that class variables can be accessed in nested classes."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    a: Annotated[int, "m"]
+    class B(self):
+        b: Annotated[int, "m"]
+c = A.a + A.B.b
+""")
+    assert checker.units["c"] == m_unit

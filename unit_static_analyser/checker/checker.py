@@ -24,6 +24,16 @@ class UnitChecker(ast.NodeVisitor):
         self.errors: list[UnitCheckerError] = []
         self.scope_stack: list[str] = []
 
+    def get_var_name(self, node: ast.AST) -> str | None:
+        """Recursively build the full attribute chain for nodes like A.B.c.d"""
+        if isinstance(node, ast.Name):
+            return node.id
+        elif isinstance(node, ast.Attribute):
+            value = self.get_var_name(node.value)
+            if value is not None:
+                return f"{value}.{node.attr}"
+        return None
+
     def scoped_key(self, var_name: str) -> str:
         if self.scope_stack:
             return ".".join(self.scope_stack + [var_name])
@@ -57,8 +67,11 @@ class UnitChecker(ast.NodeVisitor):
 
             target = node.targets[0].id
 
-            left_unit = self.lookup_unit(left_var.id) if isinstance(left_var, ast.Name) else None
-            right_unit = self.lookup_unit(right_var.id) if isinstance(right_var, ast.Name) else None
+            left_var_name = self.get_var_name(left_var)
+            right_var_name = self.get_var_name(right_var)
+
+            left_unit = self.lookup_unit(left_var_name) if left_var_name else None
+            right_unit = self.lookup_unit(right_var_name) if right_var_name else None
 
             if left_unit is None or right_unit is None:
                 self.errors.append(
@@ -120,6 +133,11 @@ class UnitChecker(ast.NodeVisitor):
                 )
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.scope_stack.append(node.name)
+        self.generic_visit(node)
+        self.scope_stack.pop()
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.scope_stack.append(node.name)
         self.generic_visit(node)
         self.scope_stack.pop()
