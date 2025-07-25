@@ -1,139 +1,111 @@
 import ast
+import pytest
 
 from unit_static_analyser.checker.checker import UnitChecker
 from unit_static_analyser.units import Unit
 
+# Define unit instances at module scope
 m_unit = Unit.from_string("m")
 s_unit = Unit.from_string("s")
+kg_unit = Unit.from_string("kg")
 
-def test_assignment():
-    """Test that a variable can be assigned a unit type."""
-    code = """
-from typing import Annotated
-
-a: Annotated[int, "m"] = 1
-"""
+def run_checker(code: str) -> UnitChecker:
     tree = ast.parse(code)
     checker = UnitChecker()
     checker.visit(tree)
+    return checker
+
+def assert_error(error, code, msg_contains=None):
+    assert error.code == code
+    if msg_contains:
+        assert msg_contains in error.message
+
+def test_assignment():
+    checker = run_checker("""
+from typing import Annotated
+a: Annotated[int, "m"] = 1
+""")
     assert checker.units["a"] == m_unit
 
 def test_addition():
-    code = """
+    checker = run_checker("""
 from typing import Annotated
-
 a: Annotated[int, "m"] = 1
 b: Annotated[int, "m"] = 2
 c = a + b
-"""
-    tree = ast.parse(code)
-    checker = UnitChecker()
-    checker.visit(tree)
-    for var_name in "a", "b", "c":
-        assert checker.units["a"] == m_unit
+""")
+    for name in ("a", "b", "c"):
+        assert checker.units[name] == m_unit
     assert not checker.errors
 
 def test_addition_error():
-    """Test that adding two quantities with different units raises a TypeError."""
-    code = """
+    checker = run_checker("""
 from typing import Annotated
-from units import m, s
 a: Annotated[int, "m"] = 1
 b: Annotated[int, "s"] = 2
 c = a + b
-"""
-    tree = ast.parse(code)
-    checker = UnitChecker()
-    checker.visit(tree)
-    error = checker.errors[0]
-    error.code = "U001"
-    error.lineno = 5
-    error.message = f"Cannot add operands with different units: m and s"
+""")
+    assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
 
 def test_division_ok():
-    """Test that dividing two quantities with compatible units works."""
-    code = """
+    checker = run_checker("""
 from typing import Annotated
 a: Annotated[int, "m"] = 1
 b: Annotated[int, "s"] = 2
 c = a / b
-"""
-    tree = ast.parse(code)
-    checker = UnitChecker()
-    checker.visit(tree)
-    assert checker.units["c"] == m_unit / s_unit
-
+""")
+    assert checker.units["c"] == Unit.from_string("m.s^-1")
 
 def test_disallow_missing_units():
-    """Test that operations involving variables without units raise a TypeError."""
-    code = """
+    checker = run_checker("""
 from typing import Annotated
 a: Annotated[int, "m"] = 1
 b = a + 4
-"""
-    tree = ast.parse(code)
-    checker = UnitChecker()
-    checker.visit(tree)
-    error = checker.errors[0]
-    error.code = "U002"
-    error.lineno = 4
-    error.message = f"Operands must both have units"
+""")
+    assert_error(checker.errors[0], "U002", "Operands must both have units")
 
 def test_function_scope():
-    """Test that functions have their own variable scopes with units."""
-    code = """
+    checker = run_checker("""
 from typing import Annotated
-
 a: Annotated[int, "m"]
 def f():
     a: Annotated[int, "s"]
-"""
-    tree = ast.parse(code)
-    checker = UnitChecker()
-    checker.visit(tree)
+""")
     assert checker.units["a"] == m_unit
     assert checker.units["f.a"] == s_unit
 
 def test_nested_function_scope():
-    """Test that nested functions can have their own variable scopes with units."""
-    code = """
+    checker = run_checker("""
 from typing import Annotated
-
 a: Annotated[int, "m"]
 def f():
     a: Annotated[int, "s"]
     def g():
         a: Annotated[int, "kg"]
-"""
-    tree = ast.parse(code)
-    checker = UnitChecker()
-    checker.visit(tree)
-    m_unit = Unit.from_string("m")
-    s_unit = Unit.from_string("s")
-    kg_unit = Unit.from_string("kg")
+""")
     assert checker.units["a"] == m_unit
     assert checker.units["f.a"] == s_unit
     assert checker.units["f.g.a"] == kg_unit
 
 def test_nested_scope_variable_lookup():
-    """Test that variables in nested scopes are correctly resolved."""
-    code = """
+    checker = run_checker("""
 from typing import Annotated
+a: Annotated[int, "m"]
+def f():
+    b: Annotated[int, "s"]
+    def g():
+        c = a + b
+""")
+    assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
 
+def test_nested_scope_variable_lookup_override():
+    checker = run_checker("""
+from typing import Annotated
 a: Annotated[int, "m"]
 def f():
     b: Annotated[int, "m"]
     def g():
         b: Annotated[int, "s"]
         c = a + b
-"""
-    tree = ast.parse(code)
-    checker = UnitChecker()
-    checker.visit(tree)
-    # c = a + b, where a is "m" (from global), b is "s" (from g)
-    # Should raise an error for incompatible units
-    error = checker.errors[0]
-    assert error.code == "U001"
-    assert "Cannot add operands with different units" in error.message
-    # Optionally, check the error references the correct units
-    assert "m" in error.message and "s" in error.message
+""")
+    assert_error(checker.errors[0], "U001", "Cannot add operands with different units")

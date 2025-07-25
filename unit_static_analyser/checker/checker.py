@@ -29,8 +29,16 @@ class UnitChecker(ast.NodeVisitor):
             return ".".join(self.scope_stack + [var_name])
         return var_name
 
+    def lookup_unit(self, var_name: str) -> Unit | None:
+        # Try all possible scope prefixes, from innermost to outermost
+        for i in range(len(self.scope_stack), -1, -1):
+            scope = self.scope_stack[:i]
+            key = ".".join(scope + [var_name]) if scope else var_name
+            if key in self.units:
+                return self.units[key]
+        return None
+
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        """Visit annotated assignments to extract unit information."""
         if isinstance(node.target, ast.Name):
             var_name = node.target.id
             unit_str = self._extract_unit_from_annotation(node.annotation)
@@ -49,17 +57,8 @@ class UnitChecker(ast.NodeVisitor):
 
             target = node.targets[0].id
 
-            left_unit = None
-            right_unit = None
-
-            # Try innermost scope first, then outer scopes
-            for scope in reversed([self.scope_stack, []]):
-                left_key = ".".join(scope + [left_var.id]) if isinstance(left_var, ast.Name) else None
-                right_key = ".".join(scope + [right_var.id]) if isinstance(right_var, ast.Name) else None
-                if left_key and left_key in self.units and left_unit is None:
-                    left_unit = self.units[left_key]
-                if right_key and right_key in self.units and right_unit is None:
-                    right_unit = self.units[right_key]
+            left_unit = self.lookup_unit(left_var.id) if isinstance(left_var, ast.Name) else None
+            right_unit = self.lookup_unit(right_var.id) if isinstance(right_var, ast.Name) else None
 
             if left_unit is None or right_unit is None:
                 self.errors.append(
