@@ -154,3 +154,42 @@ class B(A):
 """)
     assert checker.units["B.a"] == m_unit
     assert checker.units["B.b"] == s_unit
+
+def test_instance_variable_lookup():
+    """Test that instance variables can be accessed and used in expressions."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    a: Annotated[int, "m"] = 1
+a = A()
+b: Annotated[int, "m"]
+c = a.a + b
+""")
+    assert checker.units["c"] == m_unit
+
+
+def test_instance_variable_lookup_rename():
+    """Test that instance variables can be accessed and used in expressions."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    a: Annotated[int, "m"] = 1
+a = A()
+b = a
+c: Annotated[int, "m"]
+d = b.a + c
+""")
+    assert checker.units["d"] == m_unit
+
+def test_instance_variable_lookup_error():
+    """Test that instance variables can be accessed and used in expressions."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    a: Annotated[int, "m"] = 1
+a = A()
+b = a
+c: Annotated[int, "s"]
+d = b.a + c
+""")
+    assert_error(checker.errors[0], "U001", "Cannot add operands with different units")

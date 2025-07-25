@@ -23,6 +23,7 @@ class UnitChecker(ast.NodeVisitor):
         self.units: dict[str, Unit] = {}
         self.errors: list[UnitCheckerError] = []
         self.scope_stack: list[str] = []
+        self.instance_map: dict[str, str] = {}  # maps instance name to class name
 
     def get_var_name(self, node: ast.AST) -> str | None:
         """Recursively build the full attribute chain for nodes like A.B.c.d"""
@@ -31,6 +32,10 @@ class UnitChecker(ast.NodeVisitor):
         elif isinstance(node, ast.Attribute):
             value = self.get_var_name(node.value)
             if value is not None:
+                # If value is an instance, resolve to its class
+                if value in self.instance_map:
+                    class_name = self.instance_map[value]
+                    return f"{class_name}.{node.attr}"
                 return f"{value}.{node.attr}"
         return None
 
@@ -57,6 +62,24 @@ class UnitChecker(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> None:
         """Visit assignments to check unit operations and compatibility."""
+        # Track instance assignments: a = A()
+        if (
+            isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+        ):
+            self.instance_map[node.targets[0].id] = node.value.func.id
+            return
+
+        # Track variable aliasing: b = a
+        if (
+            isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in self.instance_map
+        ):
+            self.instance_map[node.targets[0].id] = self.instance_map[node.value.id]
+            return
+
         if isinstance(node.value, ast.BinOp):
             left_var = node.value.left
             right_var = node.value.right
