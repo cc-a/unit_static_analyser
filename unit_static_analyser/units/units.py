@@ -15,13 +15,13 @@ Example:
 """
 
 import re
-from typing import Any, Dict
+from typing import Self
 
 
 class Unit:
     """Represents a physical unit as a mapping of base symbols to exponents."""
 
-    def __init__(self, unit_map: Dict[str, int]):
+    def __init__(self, unit_map: dict[str, int]):
         self.unit_map = {k: v for k, v in unit_map.items() if v != 0}
 
     def __mul__(self, other: "Unit") -> "Unit":
@@ -45,14 +45,12 @@ class Unit:
     def __pow__(self, power: int) -> "Unit":
         return Unit({symbol: exp * power for symbol, exp in self.unit_map.items()})
 
-    def __eq__(self, other: Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         if not isinstance(other, Unit):
             return False
         return self.unit_map == other.unit_map
 
     def __str__(self) -> str:
-        if not self.unit_map:
-            return "1"
         parts = []
         for symbol in sorted(self.unit_map):  # sort for consistency
             exp = self.unit_map[symbol]
@@ -66,7 +64,7 @@ class Unit:
         return f"Unit({self.unit_map})"
 
     @classmethod
-    def from_string(cls, unit_str: str) -> "Unit":
+    def from_string(cls, unit_str: str) -> Self:
         """
         Parse a string like 'kg.m^2.s^-2' into a Unit instance.
 
@@ -75,7 +73,7 @@ class Unit:
         - No division allowed.
         """
 
-        unit_map = {}
+        unit_map: dict[str, int] = {}
         for part in unit_str.split("."):
             match = re.fullmatch(r"([a-zA-Z]+)(?:\^(-?\d+))?", part)
             if not match:

@@ -1,7 +1,7 @@
 """UnitChecker module."""
 
 import ast
-from ..units.units import Unit
+from ..units import Unit
 
 class UnitCheckerError:
     """Represents a unit checking error."""
@@ -11,7 +11,7 @@ class UnitCheckerError:
         self.lineno = lineno
         self.message = message
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"UnitCheckerError(code={self.code!r}, lineno={self.lineno!r}, message={self.message!r})"
 
 
