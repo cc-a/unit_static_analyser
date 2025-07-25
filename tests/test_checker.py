@@ -142,3 +142,15 @@ class A:
 c = A.a + A.B.b
 """)
     assert checker.units["c"] == m_unit
+
+def test_class_inheritance():
+    """Test that class inheritance works correctly with unit annotations."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    a: Annotated[int, "m"]
+class B(A):
+    b: Annotated[int, "s"]
+""")
+    assert checker.units["B.a"] == m_unit
+    assert checker.units["B.b"] == s_unit

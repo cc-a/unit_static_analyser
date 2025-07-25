@@ -139,6 +139,17 @@ class UnitChecker(ast.NodeVisitor):
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.scope_stack.append(node.name)
+        # Handle inheritance: copy units from base classes
+        for base in node.bases:
+            if isinstance(base, ast.Name):
+                base_class = base.id
+                # Copy all units from base_class.<var> to current_class.<var>
+                prefix = f"{base_class}."
+                current_prefix = f"{node.name}."
+                for key, unit in list(self.units.items()):
+                    if key.startswith(prefix):
+                        new_key = current_prefix + key[len(prefix):]
+                        self.units[new_key] = unit
         self.generic_visit(node)
         self.scope_stack.pop()
 
