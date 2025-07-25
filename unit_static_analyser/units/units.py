@@ -14,6 +14,7 @@ Example:
     time: Annotated[int, s] = 20
 """
 
+import re
 from typing import Any, Dict
 
 
@@ -50,22 +51,38 @@ class Unit:
         return self.unit_map == other.unit_map
 
     def __str__(self) -> str:
-        num = []
-        den = []
-        for symbol, exp in self.unit_map.items():
-            if exp > 0:
-                num.append(f"{symbol}" + (f"^{exp}" if exp != 1 else ""))
-            elif exp < 0:
-                den.append(f"{symbol}" + (f"^{abs(exp)}" if exp != -1 else ""))
-        num_str = "*".join(num) if num else "1"
-        den_str = "*".join(den)
-        return f"{num_str}/{den_str}" if den else num_str
+        if not self.unit_map:
+            return "1"
+        parts = []
+        for symbol in sorted(self.unit_map):  # sort for consistency
+            exp = self.unit_map[symbol]
+            if exp == 1:
+                parts.append(f"{symbol}")
+            else:
+                parts.append(f"{symbol}^{exp}")
+        return ".".join(parts)
 
     def __repr__(self) -> str:
         return f"Unit({self.unit_map})"
 
+    @classmethod
+    def from_string(cls, unit_str: str) -> "Unit":
+        """
+        Parse a string like 'kg.m^2.s^-2' into a Unit instance.
 
-# Base unit instances
-m = Unit({"m": 1})    # meter
-s = Unit({"s": 1})    # second
-kg = Unit({"kg": 1})  # kilogram
+        - Multiplication: '.'
+        - Powers: '^'
+        - No division allowed.
+        """
+
+        unit_map = {}
+        for part in unit_str.split("."):
+            match = re.fullmatch(r"([a-zA-Z]+)(?:\^(-?\d+))?", part)
+            if not match:
+                raise ValueError(f"Invalid unit part: {part}")
+            symbol = match.group(1)
+            exp = int(match.group(2)) if match.group(2) else 1
+            unit_map[symbol] = unit_map.get(symbol, 0) + exp
+        if not unit_map:
+            raise ValueError(f"Invalid unit string: {unit_str}")
+        return cls(unit_map)
