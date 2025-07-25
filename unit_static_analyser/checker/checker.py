@@ -1,7 +1,7 @@
 """UnitChecker module."""
 
 import ast
-from ..units import Unit
+from ..units.units import Unit
 
 class UnitCheckerError:
     """Represents a unit checking error."""
@@ -11,7 +11,7 @@ class UnitCheckerError:
         self.lineno = lineno
         self.message = message
 
-    def __repr__(self) -> str:
+    def __repr__(self):
         return f"UnitCheckerError(code={self.code!r}, lineno={self.lineno!r}, message={self.message!r})"
 
 
@@ -22,6 +22,12 @@ class UnitChecker(ast.NodeVisitor):
         """Initialize the UnitChecker with an empty unit mapping and error list."""
         self.units: dict[str, Unit] = {}
         self.errors: list[UnitCheckerError] = []
+        self.scope_stack: list[str] = []
+
+    def scoped_key(self, var_name: str) -> str:
+        if self.scope_stack:
+            return ".".join(self.scope_stack + [var_name])
+        return var_name
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         """Visit annotated assignments to extract unit information."""
@@ -29,7 +35,7 @@ class UnitChecker(ast.NodeVisitor):
             var_name = node.target.id
             unit_str = self._extract_unit_from_annotation(node.annotation)
             if unit_str is not None:
-                self.units[var_name] = Unit.from_string(unit_str)
+                self.units[self.scoped_key(var_name)] = Unit.from_string(unit_str)
 
     def visit_Assign(self, node: ast.Assign) -> None:
         """Visit assignments to check unit operations and compatibility."""
@@ -43,8 +49,17 @@ class UnitChecker(ast.NodeVisitor):
 
             target = node.targets[0].id
 
-            left_unit = self.units.get(left_var.id) if isinstance(left_var, ast.Name) else None
-            right_unit = self.units.get(right_var.id) if isinstance(right_var, ast.Name) else None
+            left_unit = None
+            right_unit = None
+
+            # Try innermost scope first, then outer scopes
+            for scope in reversed([self.scope_stack, []]):
+                left_key = ".".join(scope + [left_var.id]) if isinstance(left_var, ast.Name) else None
+                right_key = ".".join(scope + [right_var.id]) if isinstance(right_var, ast.Name) else None
+                if left_key and left_key in self.units and left_unit is None:
+                    left_unit = self.units[left_key]
+                if right_key and right_key in self.units and right_unit is None:
+                    right_unit = self.units[right_key]
 
             if left_unit is None or right_unit is None:
                 self.errors.append(
@@ -66,7 +81,7 @@ class UnitChecker(ast.NodeVisitor):
                         )
                     )
                     return
-                self.units[target] = left_unit
+                self.units[self.scoped_key(target)] = left_unit
             elif isinstance(op, ast.Sub):
                 if left_unit != right_unit:
                     self.errors.append(
@@ -77,17 +92,17 @@ class UnitChecker(ast.NodeVisitor):
                         )
                     )
                     return
-                self.units[target] = left_unit
+                self.units[self.scoped_key(target)] = left_unit
             elif isinstance(op, ast.Mult):
                 result_unit = left_unit * right_unit
-                self.units[target] = result_unit
+                self.units[self.scoped_key(target)] = result_unit
             elif isinstance(op, ast.Div):
-                result_unit = left_unit / right_unit
-                self.units[target] = result_unit
+                result_unit = left_unit * (right_unit ** -1)
+                self.units[self.scoped_key(target)] = result_unit
             elif isinstance(op, ast.Pow):
                 if isinstance(node.value.right, ast.Constant) and isinstance(node.value.right.value, int):
                     result_unit = left_unit ** node.value.right.value
-                    self.units[target] = result_unit
+                    self.units[self.scoped_key(target)] = result_unit
                 else:
                     self.errors.append(
                         UnitCheckerError(
@@ -104,6 +119,11 @@ class UnitChecker(ast.NodeVisitor):
                         message=f"Unsupported operation for units: {type(op).__name__}",
                     )
                 )
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.scope_stack.append(node.name)
+        self.generic_visit(node)
+        self.scope_stack.pop()
 
     def _extract_unit_from_annotation(self, annotation: ast.AST) -> str | None:
         # Extract unit symbol from typing.Annotated[<type>, <unit>]

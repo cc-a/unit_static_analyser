@@ -78,3 +78,62 @@ b = a + 4
     error.code = "U002"
     error.lineno = 4
     error.message = f"Operands must both have units"
+
+def test_function_scope():
+    """Test that functions have their own variable scopes with units."""
+    code = """
+from typing import Annotated
+
+a: Annotated[int, "m"]
+def f():
+    a: Annotated[int, "s"]
+"""
+    tree = ast.parse(code)
+    checker = UnitChecker()
+    checker.visit(tree)
+    assert checker.units["a"] == m_unit
+    assert checker.units["f.a"] == s_unit
+
+def test_nested_function_scope():
+    """Test that nested functions can have their own variable scopes with units."""
+    code = """
+from typing import Annotated
+
+a: Annotated[int, "m"]
+def f():
+    a: Annotated[int, "s"]
+    def g():
+        a: Annotated[int, "kg"]
+"""
+    tree = ast.parse(code)
+    checker = UnitChecker()
+    checker.visit(tree)
+    m_unit = Unit.from_string("m")
+    s_unit = Unit.from_string("s")
+    kg_unit = Unit.from_string("kg")
+    assert checker.units["a"] == m_unit
+    assert checker.units["f.a"] == s_unit
+    assert checker.units["f.g.a"] == kg_unit
+
+def test_nested_scope_variable_lookup():
+    """Test that variables in nested scopes are correctly resolved."""
+    code = """
+from typing import Annotated
+
+a: Annotated[int, "m"]
+def f():
+    b: Annotated[int, "m"]
+    def g():
+        b: Annotated[int, "s"]
+        c = a + b
+"""
+    tree = ast.parse(code)
+    checker = UnitChecker()
+    checker.visit(tree)
+    # c = a + b, where a is "m" (from global), b is "s" (from g)
+    # Should raise an error for incompatible units
+    error = checker.errors[0]
+    assert error.code == "U001"
+    assert "Cannot add operands with different units" in error.message
+    # Optionally, check the error references the correct units
+    assert "m" in error.message and "s" in error.message
