@@ -20,6 +20,16 @@ def assert_error(error, code, msg_contains=None):
     if msg_contains:
         assert msg_contains in error.message
 
+
+def assert_u005_error(error, returned_unit, expected_unit):
+    assert error.code == "U005"
+    assert error.message.startswith(
+        "Units of returned value does not match function signature"
+    )
+    assert f"returned={returned_unit}" in error.message
+    assert f"expected={expected_unit}" in error.message
+
+
 def test_assignment():
     checker = run_checker("""
 from typing import Annotated
@@ -193,3 +203,88 @@ c: Annotated[int, "s"]
 d = b.a + c
 """)
     assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
+
+
+def test_function_return_value():
+    """Test that function return values are handled correctly."""
+    checker = run_checker("""
+from typing import Annotated
+def f() -> Annotated[int, "m"]:
+    a: Annotated[int, "m"]
+    return a
+b = f()
+""")
+    assert checker.units["b"] == m_unit
+
+
+def test_function_return_value_mismatch():
+    """Test that an error is reported if the wrong unit is returned from a function."""
+    checker = run_checker("""
+from typing import Annotated
+def f() -> Annotated[int, "m"]:
+    a: Annotated[int, "s"]
+    return a
+""")
+    assert_u005_error(
+        checker.errors[0],
+        returned_unit="s",
+        expected_unit="m",
+    )
+
+
+def test_function_return_value_missing_units():
+    """Test that function signatures with return values are handled correctly."""
+    checker = run_checker("""
+from typing import Annotated
+def f() -> Annotated[int, "m"]:
+    return 1
+""")
+    assert_u005_error(
+        checker.errors[0],
+        returned_unit="None",
+        expected_unit="m",
+    )
+
+
+def test_function_return_value_nested():
+    """Test that function signatures with return values are handled correctly."""
+    checker = run_checker("""
+from typing import Annotated
+def f() -> Annotated[int, "m"]:
+    def f() -> Annotated[int, "m"]:
+        a: Annotated[int, "m"]
+        return a
+    return f()
+b = f()
+""")
+    assert checker.units["b"] == m_unit
+
+
+def test_function_return_value_nested_different_signatures():
+    """Test that function signatures with return values are handled correctly."""
+    checker = run_checker("""
+from typing import Annotated
+def f() -> Annotated[int, "m"]:
+    def f() -> Annotated[int, "s"]:
+        a: Annotated[int, "s"]
+        return a
+    a: Annotated[int, "m"]
+    return a
+b = f()
+""")
+    assert checker.units["b"] == m_unit
+
+
+def test_function_return_value_no_unit_in_signature():
+    """Test that function signatures with return values are handled correctly."""
+    checker = run_checker("""
+from typing import Annotated
+def f() -> int:
+    a: Annotated[int, "m"]
+    return a
+""")
+    assert_u005_error(
+        checker.errors[0],
+        returned_unit="m",
+        expected_unit="None",
+    )
