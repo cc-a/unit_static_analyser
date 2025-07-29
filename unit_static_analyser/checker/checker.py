@@ -3,6 +3,7 @@
 import ast
 from ..units.units import Unit
 
+
 class UnitCheckerError:
     """Represents a unit checking error."""
 
@@ -18,11 +19,11 @@ class UnitCheckerError:
 class UnitChecker(ast.NodeVisitor):
     """A static analysis visitor to check unit compatibility in Python code."""
 
-    def __init__(self) -> None:
+    def __init__(self, module_name="__main__") -> None:
         """Initialize the UnitChecker with an empty unit mapping and error list."""
         self.units: dict[str, Unit] = {}
         self.errors: list[UnitCheckerError] = []
-        self.scope_stack: list[str] = []
+        self.scope_stack: list[str] = [module_name]
         self.instance_map: dict[str, str] = {}  # maps instance name to class name
         self.function_return_units: dict[
             str, Unit
@@ -44,9 +45,8 @@ class UnitChecker(ast.NodeVisitor):
         return None
 
     def scoped_key(self, var_name: str) -> str:
-        if self.scope_stack:
-            return ".".join(self.scope_stack + [var_name])
-        return var_name
+        # Always prefix with the full scope stack (which starts with module name)
+        return ".".join(self.scope_stack + [var_name])
 
     def lookup_unit(self, var_name: str) -> Unit | None:
         # Try all possible scope prefixes, from innermost to outermost
@@ -210,8 +210,9 @@ class UnitChecker(ast.NodeVisitor):
             if isinstance(base, ast.Name):
                 base_class = base.id
                 # Copy all units from base_class.<var> to current_class.<var>
-                prefix = f"{base_class}."
-                current_prefix = f"{node.name}."
+                # Use fully qualified names for prefix and current_prefix
+                prefix = ".".join(self.scope_stack[:-1] + [base_class]) + "."
+                current_prefix = ".".join(self.scope_stack) + "."
                 for key, unit in list(self.units.items()):
                     if key.startswith(prefix):
                         new_key = current_prefix + key[len(prefix) :]
@@ -235,7 +236,9 @@ class UnitChecker(ast.NodeVisitor):
                     UnitCheckerError(
                         code="U005",
                         lineno=node.lineno,
-                        message=f"Units of returned value does not match function signature: returned={actual_unit}, expected={expected_unit}",
+                        message="Units of returned value does not match function signature: returned={}, expected={}".format(
+                            actual_unit, expected_unit
+                        ),
                     )
                 )
             return
@@ -251,9 +254,22 @@ class UnitChecker(ast.NodeVisitor):
                 UnitCheckerError(
                     code="U005",
                     lineno=node.lineno,
-                    message=f"Units of returned value does not match function signature: returned={actual_unit}, expected={expected_unit}",
+                    message="Units of returned value does not match function signature: returned={}, expected={}".format(
+                        actual_unit, expected_unit
+                    ),
                 )
             )
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        # Simulate: from other_module import var_with_units
+        module = node.module
+        for alias in node.names:
+            imported_name = alias.name
+            asname = alias.asname or imported_name
+            imported_key = f"{module}.{imported_name}"
+            local_key = self.scoped_key(asname)
+            if imported_key in self.units:
+                self.units[local_key] = self.units[imported_key]
 
     def _extract_unit_from_annotation(self, annotation: ast.AST) -> str | None:
         # Extract unit symbol from typing.Annotated[<type>, <unit>]
