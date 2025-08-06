@@ -4,9 +4,8 @@ This module provides a static analysis tool for extracting and checking physical
 from Python code using type annotations and mypy's typed AST.
 """
 
-import tempfile
 import os
-from typing import Any
+import tempfile
 
 from mypy import build
 from mypy.nodes import (
@@ -21,12 +20,13 @@ from mypy.nodes import (
     NameExpr,
     OpExpr,
     ReturnStmt,
+    Statement,
     TypeInfo,
     UnaryExpr,
     Var,
 )
 from mypy.options import Options
-from mypy.types import Instance, get_proper_type
+from mypy.types import CallableType, Instance, UnboundType, get_proper_type
 
 from unit_static_analyser.units import Unit
 
@@ -35,27 +35,35 @@ class UnitCheckerError:
     """Represents a unit checking error."""
 
     def __init__(self, code: str, lineno: int, message: str):
+        """Initialise a new unit checking error."""
         self.code = code
         self.lineno = lineno
         self.message = message
 
-    def __repr__(self):
-        return f"UnitCheckerError(code={self.code!r}, lineno={self.lineno!r}, message={self.message!r})"
+    def __repr__(self) -> str:
+        """Return a string representation of the error."""
+        return (
+            "UnitCheckerError"
+            f"(code={self.code!r}, lineno={self.lineno!r}, message={self.message!r})"
+        )
 
 
 class UnitChecker:
-    """
-    Uses mypy's typed AST to extract and check units from Annotated assignments and expressions.
-    """
+    """Uses mypy's typed AST to extract and check units."""
 
-    def __init__(self, module_name="__main__"):
+    def __init__(self, module_name: str = "__main__") -> None:
+        """Initialise a new checker.
+
+        Args:
+            module_name: module of interest
+        """
         self.units: dict[str, Unit] = {}
         self.errors: list[UnitCheckerError] = []
         self.module_name = module_name
-
-    def check(self, code: str):
-        """Run mypy on the code and extract units from Annotated assignments."""
         self.function_returns: dict[str, Unit | TypeInfo] = {}
+
+    def check(self, code: str) -> None:
+        """Run mypy on the code and extract units from Annotated assignments."""
         # Write code to a temporary file so mypy does full type inference
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as tmp:
             tmp.write(code)
@@ -78,38 +86,39 @@ class UnitChecker:
             options=options,
         )
 
-        mypy_file: MypyFile = result.files.get("__main__")
+        mypy_file = result.files.get("__main__")
         if not mypy_file:
             os.unlink(tmp_filename)
             return
         self._visit_mypy_file(mypy_file)
         os.unlink(tmp_filename)
 
-    def _visit_mypy_file(self, mypy_file: MypyFile):
+    def _visit_mypy_file(self, mypy_file: MypyFile) -> None:
         """Visit all top-level statements in the module."""
         self.module_symbol_table = mypy_file.names
         for stmt in mypy_file.defs:
             self._visit_stmt(stmt, scope=[self.module_name])
 
-    def _visit_stmt(self, stmt: Any, scope: list[str]):
+    def _visit_stmt(self, stmt: Statement, scope: list[str]) -> None:
         """Visit a statement and extract/check units as appropriate."""
         if isinstance(stmt, AssignmentStmt):
             for lvalue in stmt.lvalues:
                 if isinstance(lvalue, NameExpr):
                     var_name = lvalue.name
-                    key = ".".join(scope + [var_name])
+                    key = ".".join([*scope, var_name])
                     unit = self._extract_unit_from_type(stmt)
                     if unit is not None:
                         self.units[key] = unit
-                    # If assignment has a value, try to infer unit from the value (e.g., c = a + b)
+                    # If assignment has a value, try to infer unit from the value
+                    # (e.g., c = a + b)
                     if stmt.rvalue is not None:
                         inferred_unit = self._infer_unit_from_expr(stmt.rvalue, scope)
-                        if inferred_unit is not None:
+                        if isinstance(inferred_unit, Unit):
                             self.units[key] = inferred_unit
         elif isinstance(stmt, FuncDef):
             # Visit function body and check return units
             for substmt in stmt.body.body:
-                self._visit_stmt(substmt, scope + [stmt.name])
+                self._visit_stmt(substmt, [*scope, stmt.name])
 
             # Record return type of function
             try:
@@ -122,18 +131,27 @@ class UnitChecker:
             except AttributeError:
                 # regular function
                 sym_node = stmt
-                func_fullname = ".".join(scope + [stmt.name])
-            if not sym_node:
+                func_fullname = ".".join([*scope, stmt.name])
+            if not isinstance(sym_node, FuncDef):
                 return
             unanalyzed_type = sym_node.unanalyzed_type
-            if unanalyzed_type is None:
+            if not isinstance(unanalyzed_type, CallableType) or not isinstance(
+                unanalyzed_type.ret_type, UnboundType
+            ):
                 return
+            ret_unit: Unit | TypeInfo
             if (ret_type := unanalyzed_type.ret_type).name == "Annotated":
+                if not isinstance(ret_type.args[1], UnboundType):
+                    return
                 try:
                     ret_unit = Unit.from_string(ret_type.args[1].name)
                 except IndexError:
-                    return
+                    return None
             else:
+                if not isinstance(sym_node.type, CallableType) or not isinstance(
+                    sym_node.type.ret_type, Instance
+                ):
+                    return None
                 ret_unit = sym_node.type.ret_type.type
             self.function_returns[func_fullname] = ret_unit
 
@@ -141,21 +159,25 @@ class UnitChecker:
             for substmt in stmt.body.body:
                 if isinstance(substmt, ReturnStmt) and substmt.expr is not None:
                     returned_unit = self._infer_unit_from_expr(
-                        substmt.expr, scope + [stmt.name]
+                        substmt.expr, [*scope, stmt.name]
                     )
                     if returned_unit is not None and returned_unit != ret_unit:
                         self.errors.append(
                             UnitCheckerError(
                                 code="U004",
                                 lineno=getattr(substmt, "line", 0),
-                                message=f"Unit of return value does not match function signature: returned {returned_unit}, expected {ret_unit}",
+                                message=(
+                                    "Unit of return value does not match function "
+                                    f"signature: returned {returned_unit}, "
+                                    f"expected {ret_unit}"
+                                ),
                             )
                         )
 
         elif isinstance(stmt, ClassDef):
             class_name = getattr(stmt, "name", None)
             if class_name:
-                new_scope = scope + [class_name]
+                new_scope = [*scope, class_name]
                 for substmt in getattr(stmt.defs, "body", []):
                     self._visit_stmt(substmt, new_scope)
         elif isinstance(stmt, ExpressionStmt):
@@ -171,7 +193,7 @@ class UnitChecker:
                 # breakpoint()
                 return expr.node
             else:
-                key = ".".join(scope + [expr.name])
+                key = ".".join([*scope, expr.name])
                 return self.units.get(key)
         elif isinstance(expr, UnaryExpr):
             # Handle unary operators: -a, +a, ~a
@@ -183,8 +205,10 @@ class UnitChecker:
             right = expr.right
             left_unit = self._infer_unit_from_expr(left, scope)
             right_unit = self._infer_unit_from_expr(right, scope)
+            # if isinstance(left_unit, Unit) or isinstance(right_unit, Unit):
+            #     return None
             op = expr.op
-            if left_unit is None or right_unit is None:
+            if not isinstance(left_unit, Unit) or not isinstance(right_unit, Unit):
                 self.errors.append(
                     UnitCheckerError(
                         code="U002",
@@ -201,7 +225,10 @@ class UnitChecker:
                         UnitCheckerError(
                             code="U001",
                             lineno=getattr(expr, "line", 0),
-                            message=f"Cannot add operands with different units: {left_unit} and {right_unit}",
+                            message=(
+                                "Cannot add operands with different units: "
+                                f"{left_unit} and {right_unit}"
+                            ),
                         )
                     )
                     return None
@@ -221,23 +248,26 @@ class UnitChecker:
             ):
                 func_node = expr.callee.node
                 # Get expected units for parameters
-                param_units = []
-                if hasattr(func_node, "unanalyzed_type") and hasattr(
-                    func_node.unanalyzed_type, "arg_types"
-                ):
-                    for arg_type in func_node.unanalyzed_type.arg_types:
-                        if getattr(arg_type, "name", None) == "Annotated":
-                            try:
-                                param_units.append(
-                                    Unit.from_string(arg_type.args[1].name)
-                                )
-                            except Exception:
-                                param_units.append(None)
-                        else:
+                param_units: list[Unit | None] = []
+                unanalyzed_type = func_node.unanalyzed_type
+                if not isinstance(unanalyzed_type, CallableType):
+                    return None
+                for arg_type in unanalyzed_type.arg_types:
+                    if getattr(arg_type, "name", None) == "Annotated":
+                        if not isinstance(arg_type, UnboundType) or not isinstance(
+                            arg_type.args[1], UnboundType
+                        ):
+                            continue
+                        try:
+                            param_units.append(Unit.from_string(arg_type.args[1].name))
+                        except ValueError:
                             param_units.append(None)
+                    else:
+                        param_units.append(None)
                 # Check argument units
                 for i, arg in enumerate(expr.args):
-                    # Recursively check for nested CallExpr to catch mismatches in intermediate steps
+                    # Recursively check for nested CallExpr to catch mismatches in
+                    # intermediate steps
                     if isinstance(arg, CallExpr):
                         self._infer_unit_from_expr(arg, scope)
                     arg_unit = self._infer_unit_from_expr(arg, scope)
@@ -251,7 +281,10 @@ class UnitChecker:
                             UnitCheckerError(
                                 code="U003",
                                 lineno=getattr(expr, "line", 0),
-                                message=f"Argument {i + 1} to function '{func_node.name}' has unit {arg_unit}, expected {expected_unit}",
+                                message=(
+                                    f"Argument {i + 1} to function '{func_node.name}' "
+                                    f"has unit {arg_unit}, expected {expected_unit}"
+                                ),
                             )
                         )
             return callee_unit_or_func
@@ -268,7 +301,8 @@ class UnitChecker:
                     and base_name in self.module_symbol_table
                 ):
                     sym_node = self.module_symbol_table[base_name]
-                    # If it's a variable with a type, and the type is an Instance, get the class name
+                    # If it's a variable with a type, and the type is an Instance
+                    # then, get the class name
                     if isinstance(sym_node.node, Var) and hasattr(
                         sym_node.node, "type"
                     ):
@@ -286,6 +320,8 @@ class UnitChecker:
                         return self.units[class_key]
             else:
                 type_info = self._infer_unit_from_expr(base, scope)
+                if not isinstance(type_info, TypeInfo):
+                    return None
                 if hasattr(type_info, "fullname"):
                     class_key = f"{type_info.fullname}.{attr}"
                     if class_key in self.function_returns:
@@ -299,10 +335,11 @@ class UnitChecker:
     ANNOTATED_TYPE_NAMES = ("typing.Annotated", "typing_extensions.Annotated")
 
     def _extract_unit_from_type(self, stmt: AssignmentStmt) -> Unit | None:
-        if not (type_ := getattr(stmt, "unanalyzed_type", None)):
-            return
-        if type_.name == "Annotated":
+        if (
+            type_ := getattr(stmt, "unanalyzed_type", None)
+        ) and type_.name == "Annotated":
             try:
                 return Unit.from_string(type_.args[1].name)
             except IndexError:
-                return
+                return None
+        return None

@@ -1,24 +1,27 @@
-import abc
-import ast
 import pytest
+from mypy.nodes import TypeInfo
 
 from unit_static_analyser.mypy_checker.checker import UnitChecker
 from unit_static_analyser.units import Unit
 
-from mypy.nodes import TypeInfo
-
 # Define unit instances at module scope
 m_unit = Unit.from_string("m")
-from typing import Annotated
 
 s_unit = Unit.from_string("s")
 kg_unit = Unit.from_string("kg")
 
 
-from unit_static_analyser.mypy_checker.checker import UnitChecker
-
-
 def run_checker(code: str, module_name="__main__", external_units=None) -> UnitChecker:
+    """Run the UnitChecker on the given code and return the checker instance.
+
+    Args:
+        code: The Python code to analyze.
+        module_name: The module name to use for the analysis.
+        external_units: Optional dictionary of external units to include.
+
+    Returns:
+        The UnitChecker instance after analysis.
+    """
     checker = UnitChecker(module_name=module_name)
     checker.check(code)
     if external_units:
@@ -27,6 +30,14 @@ def run_checker(code: str, module_name="__main__", external_units=None) -> UnitC
 
 
 def assert_error(error, code, msg_contains=None, lineno=None):
+    """Assert that an error matches the expected code, message content, and line number.
+
+    Args:
+        error: The UnitCheckerError instance to check.
+        code: The expected error code.
+        msg_contains: Optional substring that should be in the error message.
+        lineno: Optional expected line number for the error.
+    """
     assert error.code == code
     if lineno:
         assert error.lineno == lineno
@@ -35,6 +46,7 @@ def assert_error(error, code, msg_contains=None, lineno=None):
 
 
 def test_assignment_arbitrary_expression():
+    """Test that units are correctly inferred for arbitrary complex expressions."""
     checker = run_checker("""
 from typing import Annotated
 class A:
@@ -47,6 +59,7 @@ b = f().a
 
 
 def test_assignment_arbitrary_expression2():
+    """Another test that units are inferred for arbitrary complex expressions."""
     checker = run_checker("""
 from typing import Annotated
 class A:
@@ -59,6 +72,7 @@ b = f().a
 
 
 def test_assignment_arbitrary_expression3():
+    """Another test that units are inferred for arbitrary complex expressions."""
     checker = run_checker("""
 from typing import Annotated
 class A:
@@ -75,6 +89,7 @@ b = f2(f().a)
 
 
 def test_assignment_instance_attribute():
+    """Test that units are correctly inferred for instance attribute access."""
     checker = run_checker("""
 from typing import Annotated
 class A:
@@ -88,6 +103,7 @@ c = A().a
 
 
 def test_assignment_member_access():
+    """Test that units are correctly inferred for class attribute access."""
     checker = run_checker("""
 from typing import Annotated
 class A:
@@ -98,6 +114,7 @@ b = A.a
 
 
 def test_assignment_function_call():
+    """Test units are inferred for function return values with unit annotations."""
     checker = run_checker("""
 from typing import Annotated
 def f() -> Annotated[int, "m"]:
@@ -108,6 +125,7 @@ b = f()
 
 
 def test_assignment_class_init_member_access():
+    """Test units are inferred for attribute access on instances created inline."""
     checker = run_checker("""
 from typing import Annotated
 class A:
@@ -118,6 +136,7 @@ b = A().a
 
 
 def test_assignment_alias():
+    """Test that units are correctly propagated through variable aliasing."""
     checker = run_checker("""
 from typing import Annotated
 a: Annotated[int, "m"]
@@ -127,6 +146,7 @@ b = a
 
 
 def test_assignment():
+    """Test that units are correctly assigned to annotated variables."""
     checker = run_checker("""
 from typing import Annotated
 a: Annotated[int, "m"] = 1
@@ -135,6 +155,7 @@ a: Annotated[int, "m"] = 1
 
 
 def test_addition():
+    """Test addition of variables with same unit is allowed and unit is preserved."""
     checker = run_checker("""
 from typing import Annotated
 a: Annotated[int, "m"] = 1
@@ -147,6 +168,7 @@ c = a + b
 
 
 def test_addition_error():
+    """Test that addition of variables with different units raises an error."""
     checker = run_checker("""
 from typing import Annotated
 a: Annotated[int, "m"] = 1
@@ -157,6 +179,7 @@ c = a + b
 
 
 def test_division_ok():
+    """Test division of variables with units produces the correct resulting unit."""
     checker = run_checker("""
 from typing import Annotated
 a: Annotated[int, "m"] = 1
@@ -167,6 +190,7 @@ c = a / b
 
 
 def test_disallow_missing_units():
+    """Test that operations involving unannotated values raise an error."""
     checker = run_checker("""
 from typing import Annotated
 a: Annotated[int, "m"] = 1
@@ -177,6 +201,7 @@ b = a + 4
 
 @pytest.mark.parametrize("symbol", ("+", "-"))
 def test_expression_unary(symbol):
+    """Test that unary plus and minus preserve the unit of the operand."""
     checker = run_checker(f"""
 from typing import Annotated
 a: Annotated[int, "m"] = 1
@@ -186,6 +211,7 @@ b = {symbol}a
 
 
 def test_expression_instance_method():
+    """Test that units are correctly inferred for return values of instance methods."""
     checker = run_checker("""
 from typing import Annotated
 class A:
@@ -198,6 +224,7 @@ b = A().f()
 
 
 def test_expression_nested_function_call_mismatch():
+    """Test that unit mismatches are detected in nested function calls."""
     checker = run_checker("""
 from typing import Annotated
 def f1() -> Annotated[int, "s"]:
@@ -212,6 +239,7 @@ a = f2(f1())
 
 
 def test_expression_function_call_attribute_mismatch():
+    """Test  unit mismatches are detected when passing class attributes to functions."""
     checker = run_checker("""
 from typing import Annotated
 class A:
@@ -224,6 +252,7 @@ a = f(A.a)
 
 
 def test_expression_function_call_instance_attribute_mismatch():
+    """Test unit mismatches are detected when using instance attributes in functions."""
     checker = run_checker("""
 from typing import Annotated
 class A:
@@ -236,6 +265,7 @@ a = f(A().a)
 
 
 def test_expression_function_args():
+    """Test that function arguments with correct units are accepted."""
     checker = run_checker("""
 from typing import Annotated
 def f(a: Annotated[int, "m"]) -> Annotated[int, "m"]:
@@ -248,6 +278,7 @@ b = f(a)
 
 
 def test_expression_function_args_mismatch():
+    """Test that function arguments with incorrect units raise an error."""
     checker = run_checker("""
 from typing import Annotated
 def f(a: Annotated[int, "m"]) -> Annotated[int, "m"]:
@@ -261,6 +292,7 @@ b = f(a)
 
 
 def test_function_no_return_type():
+    """Test that functions without a return type annotation are handled gracefully."""
     checker = run_checker("""
 from typing import Annotated
 def f():
@@ -270,6 +302,7 @@ def f():
 
 
 def test_function_return_type_no_unit():
+    """Test functions with non-unit return types are handled."""
     checker = run_checker("""
 from typing import Annotated
 def f() -> int:
@@ -282,6 +315,7 @@ def f() -> int:
 
 
 def test_function_return_type_wrong_unit():
+    """Test returning a value with the wrong unit from a function raises an error."""
     checker = run_checker("""
 from typing import Annotated
 def f() -> Annotated[int, "m"]:
@@ -296,6 +330,7 @@ def f() -> Annotated[int, "m"]:
 
 
 def test_function_return_type_wrong_unit_nested():
+    """Test that return unit mismatches are detected in nested function definitions."""
     checker = run_checker("""
 from typing import Annotated
 def f() -> Annotated[int, "m"]:
@@ -322,10 +357,15 @@ def f() -> Annotated[int, "m"]:
 #     def g():
 #         c = a + b
 # """)
-#     assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
+#     assert_error(
+#         checker.errors[0],
+#         "U001",
+#         "Cannot add operands with different units"
+#     )
 
 
 def test_function_bodies():
+    """Test units are tracked within function bodies and errors are reported."""
     checker = run_checker("""
 from typing import Annotated
 def f():
@@ -339,6 +379,7 @@ def f():
 
 
 def test_function_scope_lookup():
+    """Test that function scope variable lookup works for return statements."""
     checker = run_checker("""
 from typing import Annotated
 a: Annotated[int, "m"]
@@ -349,6 +390,7 @@ def f() -> Annotated[int, "s"]:
 
 
 def test_expression():
+    """Test that unit mismatches in expressions are detected and reported."""
     checker = run_checker("""
 from typing import Annotated
 a: Annotated[int, "m"]
@@ -368,7 +410,11 @@ a + b
 # """)
 #     assert checker.units["__main__.A.a"] == m_unit
 #     assert checker.units["__main__.A.b"] == s_unit
-#     assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
+#     assert_error(
+#         checker.errors[0],
+#         "U001",
+#         "Cannot add operands with different units"
+# )
 
 
 # def test_class_nested_scope_variable():
@@ -380,7 +426,11 @@ a + b
 #     def f(self):
 #         c = a + b
 # """)
-#     assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
+#     assert_error(
+#         checker.errors[0],
+#         "U001",
+#         "Cannot add operands with different units"
+# )
 
 
 # def test_module_import():
