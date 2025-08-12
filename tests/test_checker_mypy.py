@@ -1,7 +1,7 @@
 import pytest
 from mypy.nodes import TypeInfo
 
-from unit_static_analyser.mypy_checker.checker import UnitChecker
+from unit_static_analyser.mypy_checker.checker import FuncUnitDescription, UnitChecker
 from unit_static_analyser.units import Unit
 
 # Define unit instances at module scope
@@ -98,8 +98,8 @@ a = A()
 b = a.a
 c = A().a
 """)
-    assert checker.units["__main__.c"] == m_unit
     assert checker.units["__main__.b"] == m_unit
+    assert checker.units["__main__.c"] == m_unit
 
 
 def test_assignment_member_access():
@@ -274,7 +274,22 @@ a: Annotated[int, "m"] = 1
 b = f(a)
 """)
     assert checker.units["__main__.b"] == m_unit
-    assert checker.function_returns["__main__.f"] == m_unit
+    func_units = checker.function_units["__main__.f"]
+    assert isinstance(func_units.returns, Unit)
+    assert func_units.returns == m_unit
+
+
+def test_expression_method_args():
+    """Test that method arguments with correct units are accepted."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    def f(self, a: Annotated[int, "m"]) -> Annotated[int, "m"]:
+        return a
+a: Annotated[int, "m"] = 1
+b = A().f(a)
+""")
+    assert checker.units["__main__.b"] == m_unit
 
 
 def test_expression_function_args_mismatch():
@@ -291,6 +306,20 @@ b = f(a)
     assert "has unit s, expected m" in checker.errors[0].message
 
 
+def test_method_args_mismatch():
+    """Test that method arguments with incorrect units raise an error."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    def f(self, a: Annotated[int, "m"]) -> Annotated[int, "m"]:
+        return a
+a: Annotated[int, "s"] = 1
+b = A().f(a)
+""")
+    assert_error(checker.errors[0], "U003", "Argument 1 to function 'A.f'")
+    assert "has unit s, expected m" in checker.errors[0].message
+
+
 def test_function_no_return_type():
     """Test that functions without a return type annotation are handled gracefully."""
     checker = run_checker("""
@@ -298,7 +327,7 @@ from typing import Annotated
 def f():
     pass
 """)
-    assert "__main__.f" not in checker.function_returns
+    assert "__main__.f" not in checker.function_units
 
 
 def test_function_return_type_no_unit():
@@ -309,9 +338,11 @@ def f() -> int:
     pass
 """)
 
-    ret_value = checker.function_returns["__main__.f"]
-    assert isinstance(ret_value, TypeInfo)
-    assert ret_value.fullname == "builtins.int"
+    ret_value = checker.function_units["__main__.f"]
+    assert isinstance(ret_value, FuncUnitDescription)
+    assert ret_value.returns
+    assert isinstance(ret_value.returns, TypeInfo)
+    assert ret_value.returns.fullname == "builtins.int"
 
 
 def test_function_return_type_wrong_unit():
@@ -389,7 +420,7 @@ def f() -> Annotated[int, "s"]:
     assert checker
 
 
-def test_expression():
+def test_bare_expression():
     """Test that unit mismatches in expressions are detected and reported."""
     checker = run_checker("""
 from typing import Annotated
@@ -398,6 +429,30 @@ b: Annotated[int, "s"]
 a + b
 """)
     assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
+
+
+def test_function_arg_units():
+    """Test that function arguments are recorded in checker.units."""
+    checker = run_checker("""
+from typing import Annotated
+def f(a: Annotated[int, "m"]):
+    pass
+""")
+    assert checker.units["__main__.f.a"] == m_unit
+
+
+def test_class_chaining():
+    """Test resolution of expressions with chained class attributes."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    a: Annotated[int, "m"]
+class B:
+    A = A
+    b: Annotated[int, "m"]
+b = B().A.a
+""")
+    assert checker.units["__main__.b"] == m_unit
 
 
 # def test_class_bodies():
@@ -453,3 +508,17 @@ a + b
 #     )
 #     assert checker.units["__main__.var_with_units"] == m_unit
 #     assert checker.units["other_module.var_with_units"] == m_unit
+
+# def test_call_instance():
+#     checker = run_checker("""
+# from typing import Annotated
+# class A:
+#     def __call__(self) -> Annotated[int, "m"]:
+#         a: Annotated[int, "m"]
+#         return a
+# a = A()
+# b = a()
+# c = A()()
+# """)
+#     assert checker.units["__main__.b"] == m_unit
+#     assert checker.units["__main__.c"] == m_unit
