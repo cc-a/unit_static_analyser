@@ -665,6 +665,41 @@ d == e # (both unitless, no error)
 #     assert checker.units["__main__.var_with_units"] == m_unit
 #     assert checker.units["other_module.var_with_units"] == m_unit
 
+
+def test_class_init_attribute():
+    """Test that attributes assigned during init statements are handled."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    def __init__(self):
+        self.a: Annotated[int, "m"] = 1
+a = A()
+b = a.a
+c = A().a
+""")
+    assert checker.units["__main__.A.a"] == m_unit
+    assert checker.units["__main__.b"] == m_unit
+    assert checker.units["__main__.c"] == m_unit
+
+
+def test_class_self_lookup():
+    """Test that accessing variables via self works as expected."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    def __init__(self):
+        self.a: Annotated[int, "m"] = 1
+        self.b: Annotated[int, "m"] = 2
+        self.c: Annotated[int, "s"] = 3
+        self.d = self.a + self.b
+        self.b + self.c
+""")
+    assert checker.units["__main__.A.d"] == m_unit
+    assert_error(
+        checker.errors[0], "U001", "Cannot add operands with different units", lineno=9
+    )
+
+
 # def test_call_instance():
 #     checker = run_checker("""
 # from typing import Annotated

@@ -205,18 +205,28 @@ class UnitChecker:
             if isinstance(lvalue, NameExpr):
                 var_name = lvalue.name
                 key = ".".join([*scope, var_name])
-                unit = self._extract_unit_from_type(stmt)
-                if unit is not None:
-                    self.units[key] = unit
-                # If assignment has a value, try to infer unit from the value
-                # (e.g., c = a + b)
-                if stmt.rvalue is not None:
-                    inferred_unit = self._infer_unit_from_expr(stmt.rvalue, scope)
-                    if isinstance(inferred_unit, Unit):
-                        self.units[key] = inferred_unit
-                    if isinstance(inferred_unit, FuncUnitDescription):
-                        if isinstance(inferred_unit.returns, Unit):
-                            self.units[key] = inferred_unit.returns
+            elif (
+                isinstance(lvalue, MemberExpr)
+                and isinstance(lvalue.expr, NameExpr)
+                and lvalue.expr.name == "self"
+            ):
+                # remove __init__ from the scope
+                key = ".".join([*scope[:-1], lvalue.name])
+            else:
+                continue
+
+            unit = self._extract_unit_from_type(stmt)
+            if unit is not None:
+                self.units[key] = unit
+            # If assignment has a value, try to infer unit from the value
+            # (e.g., c = a + b)
+            if stmt.rvalue is not None:
+                inferred_unit = self._infer_unit_from_expr(stmt.rvalue, scope)
+                if isinstance(inferred_unit, Unit):
+                    self.units[key] = inferred_unit
+                if isinstance(inferred_unit, FuncUnitDescription):
+                    if isinstance(inferred_unit.returns, Unit):
+                        self.units[key] = inferred_unit.returns
 
     def _process_funcdef_stmt(self, stmt: FuncDef, scope: list[str]) -> None:
         """Process a function definition statement and extract/check units."""
