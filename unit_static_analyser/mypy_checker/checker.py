@@ -14,6 +14,7 @@ from mypy.nodes import (
     AssignmentStmt,
     CallExpr,
     ClassDef,
+    ComparisonExpr,
     Expression,
     ExpressionStmt,
     FuncDef,
@@ -378,6 +379,9 @@ class UnitChecker:
                 return self._process_call_expr(expr, scope)
             case MemberExpr():
                 return self._process_member_expr(expr, scope)
+            case ComparisonExpr():
+                self._process_comparison_expr(expr, scope)
+                return None
             case _:
                 return None
 
@@ -471,4 +475,44 @@ class UnitChecker:
                 return Unit.from_string(type_.args[1].name)
             except IndexError:
                 return None
+
+        return None
+
+    def _process_comparison_expr(self, expr: ComparisonExpr, scope: list[str]) -> None:
+        """Process a ComparisonExpr (e.g., a < b, x == y).
+
+        Checks that all adjacent operands in the comparison have compatible units.
+        Returns None, as comparisons are always unitless (boolean).
+        """
+        operands = expr.operands
+        for i in range(len(operands) - 1):
+            left_unit = self._infer_unit_from_expr(operands[i], scope)
+            right_unit = self._infer_unit_from_expr(operands[i + 1], scope)
+            if not isinstance(left_unit, Unit) and not isinstance(right_unit, Unit):
+                return None
+            # Disallow if only one side has units
+            if isinstance(left_unit, Unit) ^ isinstance(right_unit, Unit):  # ^ is xor
+                self.errors.append(
+                    UnitCheckerError(
+                        code="U006",
+                        lineno=getattr(expr, "line", 0),
+                        message=(
+                            "Cannot compare a unitful operand with a unitless operand"
+                        ),
+                    )
+                )
+                return None
+            # Both sides have unit
+            if left_unit != right_unit:
+                self.errors.append(
+                    UnitCheckerError(
+                        code="U005",
+                        lineno=getattr(expr, "line", 0),
+                        message=(
+                            f"Cannot compare operands with different units: "
+                            f"{left_unit} and {right_unit}"
+                        ),
+                    )
+                )
+        # Comparison expressions are always unitless (boolean)
         return None

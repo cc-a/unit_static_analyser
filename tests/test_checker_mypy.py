@@ -44,6 +44,26 @@ def assert_error(error, code, msg_contains=None, lineno=None):
         assert msg_contains in error.message
 
 
+def assert_error_u005(error, left_unit, right_unit, lineno=None):
+    """Assert that a U005 error matches expected left/right units and message."""
+    assert error.code == "U005"
+    expected_msg = (
+        f"Cannot compare operands with different units: {left_unit} and {right_unit}"
+    )
+    assert expected_msg in error.message
+    if lineno is not None:
+        assert error.lineno == lineno
+
+
+def assert_error_u006(error, lineno=None):
+    """Assert that a U006 error matches expected left/right units and message."""
+    assert error.code == "U006"
+    expected_msg = "Cannot compare a unitful operand with a unitless operand"
+    assert expected_msg in error.message
+    if lineno is not None:
+        assert error.lineno == lineno
+
+
 def test_assignment_arbitrary_expression():
     """Test that units are correctly inferred for arbitrary complex expressions."""
     checker = run_checker("""
@@ -561,6 +581,27 @@ class A:
         c = a + b
 """)
     assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
+
+
+def test_comparison_expr():
+    """Test expressions comparing units with numbers."""
+    checker = run_checker("""
+from typing import Annotated
+a: Annotated[int, "m"]
+b: Annotated[int, "m"]
+c: Annotated[int, "s"]
+d: int
+e: int
+a == b # (units match, no error)
+b == c # (units differ, error)
+a == b == c # (b == c triggers error)
+a == d # (unitful and unitless, error)
+d == e # (both unitless, no error)
+""")
+    assert_error_u005(checker.errors[0], m_unit, s_unit, lineno=9)
+    assert_error_u005(checker.errors[1], m_unit, s_unit, lineno=10)
+    assert_error_u006(checker.errors[2], lineno=11)
+    assert len(checker.errors) == 3
 
 
 # def test_module_import():
