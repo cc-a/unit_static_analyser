@@ -15,6 +15,7 @@ from mypy.nodes import (
     CallExpr,
     ClassDef,
     ComparisonExpr,
+    ConditionalExpr,
     Expression,
     ExpressionStmt,
     FuncDef,
@@ -382,6 +383,8 @@ class UnitChecker:
             case ComparisonExpr():
                 self._process_comparison_expr(expr, scope)
                 return None
+            case ConditionalExpr():
+                return self._process_conditional_expr(expr, scope)
             case _:
                 return None
 
@@ -515,4 +518,41 @@ class UnitChecker:
                     )
                 )
         # Comparison expressions are always unitless (boolean)
+        return None
+
+    def _process_conditional_expr(
+        self, expr: ConditionalExpr, scope: list[str]
+    ) -> Unit | None:
+        """Process a ConditionalExpr (if-else expression).
+
+        Returns the unit if both branches match, otherwise emits U007 and returns None.
+        """
+        true_unit = self._infer_unit_from_expr(expr.if_expr, scope)
+        false_unit = self._infer_unit_from_expr(expr.else_expr, scope)
+        if isinstance(true_unit, Unit) and isinstance(false_unit, Unit):
+            if true_unit == false_unit:
+                return true_unit
+            else:
+                self.errors.append(
+                    UnitCheckerError(
+                        code="U007",
+                        lineno=getattr(expr, "line", 0),
+                        message=(
+                            f"Conditional branches have different units: "
+                            f"{true_unit} and {false_unit}"
+                        ),
+                    )
+                )
+                return None
+        # If only one branch has a unit, treat as error (unit mismatch)
+        if isinstance(true_unit, Unit) ^ isinstance(false_unit, Unit):  # ^ is xor
+            self.errors.append(
+                UnitCheckerError(
+                    code="U008",
+                    lineno=getattr(expr, "line", 0),
+                    message=("Both branches of conditional must a unit."),
+                )
+            )
+            return None
+        # If neither branch has a unit, return None (unitless)
         return None

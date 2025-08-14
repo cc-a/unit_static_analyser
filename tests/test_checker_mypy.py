@@ -64,6 +64,26 @@ def assert_error_u006(error, lineno=None):
         assert error.lineno == lineno
 
 
+def assert_error_u007(error, if_unit, else_unit, lineno=None):
+    """Assert that a U007 error matches expected if/else units and message."""
+    assert error.code == "U007"
+    expected_msg = (
+        f"Conditional branches have different units: {if_unit} and {else_unit}"
+    )
+    assert expected_msg in error.message
+    if lineno is not None:
+        assert error.lineno == lineno
+
+
+def assert_error_u008(error, lineno=None):
+    """Assert that a U008 error matches expected message."""
+    assert error.code == "U008"
+    expected_msg = "Both branches of conditional must a unit."
+    assert expected_msg in error.message
+    if lineno is not None:
+        assert error.lineno == lineno
+
+
 def test_assignment_arbitrary_expression():
     """Test that units are correctly inferred for arbitrary complex expressions."""
     checker = run_checker("""
@@ -581,6 +601,26 @@ class A:
         c = a + b
 """)
     assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
+
+
+def test_if_else_expr():
+    """Test expressions containing if else conditional statements."""
+    checker = run_checker("""
+from typing import Annotated
+a: Annotated[int, "m"]
+b: Annotated[int, "m"]
+c: Annotated[int, "s"]
+d: int
+e: int
+f = a if a > b else b  # fine - a and b have same unit
+a if a > b else c      # error - a and c have different units
+a if a > b else d      # error - a has units, d does not
+e if a > b else d      # fine - e and d both have no unit
+""")
+    assert checker.units["__main__.f"] == m_unit
+    assert_error_u007(checker.errors[0], m_unit, s_unit, lineno=9)
+    assert_error_u008(checker.errors[1], lineno=10)
+    assert len(checker.errors) == 2
 
 
 def test_comparison_expr():
