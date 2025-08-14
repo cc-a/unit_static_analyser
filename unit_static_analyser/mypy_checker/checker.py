@@ -4,12 +4,9 @@ This module provides a static analysis tool for extracting and checking physical
 from Python code using type annotations and mypy's typed AST.
 """
 
-import os
-import tempfile
 from dataclasses import dataclass
 from typing import Self
 
-from mypy import build
 from mypy.nodes import (
     AssignmentStmt,
     CallExpr,
@@ -148,12 +145,13 @@ class UnitChecker:
         self.module_name = module_name
         self.function_units: dict[str, FuncUnitDescription] = {}
 
-    def check(self, code: str) -> None:
-        """Run mypy on the code and extract units from Annotated assignments."""
-        # Write code to a temporary file so mypy does full type inference
-        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as tmp:
-            tmp.write(code)
-            tmp_filename = tmp.name
+    def check(self, paths: list[str]) -> None:
+        """Run check units annotations on the given file(s) or directory(ies).
+
+        Args:
+            paths: List of file or directory paths to analyze.
+        """
+        from mypy.build import BuildSource, build
 
         options = Options()
         options.incremental = False
@@ -167,17 +165,13 @@ class UnitChecker:
         options.export_types = True
         options.preserve_asts = True
 
-        result = build.build(
-            sources=[build.BuildSource(tmp_filename, None, None)],
-            options=options,
-        )
+        sources = [BuildSource(path, None, None) for path in paths]
+        result = build(sources=sources, options=options)
 
         mypy_file = result.files.get("__main__")
         if not mypy_file:
-            os.unlink(tmp_filename)
             return
         self._visit_mypy_file(mypy_file)
-        os.unlink(tmp_filename)
 
     def _visit_mypy_file(self, mypy_file: MypyFile) -> None:
         """Visit all top-level statements in the module."""
