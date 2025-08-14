@@ -700,16 +700,34 @@ class A:
     )
 
 
-# def test_call_instance():
-#     checker = run_checker("""
-# from typing import Annotated
-# class A:
-#     def __call__(self) -> Annotated[int, "m"]:
-#         a: Annotated[int, "m"]
-#         return a
-# a = A()
-# b = a()
-# c = A()()
-# """)
-#     assert checker.units["__main__.b"] == m_unit
-#     assert checker.units["__main__.c"] == m_unit
+def test_call_instance():
+    """Test that instance __call__ methods are treated correctly."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    def __call__(self) -> Annotated[int, "m"]:
+        a: Annotated[int, "m"]
+        return a
+a = A()
+b = a()
+c = A()()
+""")
+    assert checker.units["__main__.b"] == m_unit
+    assert checker.units["__main__.c"] == m_unit
+
+
+def test_call_instance_error():
+    """Test that instance __call__ methods are error checked."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    def __call__(self, a: Annotated[int, "m"]) -> Annotated[int, "m"]:
+        return a
+arg: Annotated[int, "s"] = 1
+a = A()
+b = a(arg)
+c = A()(arg)
+""")
+    assert checker.errors
+    assert_error(checker.errors[0], "U003", "Argument 1 to function 'A.__call__'")
+    assert "has unit s, expected m" in checker.errors[0].message

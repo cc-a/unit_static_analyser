@@ -266,7 +266,10 @@ class UnitChecker:
                 returned_unit = self._infer_unit_from_expr(
                     substmt.expr, [*scope, stmt.name]
                 )
-                if returned_unit is not None and returned_unit != unit_desc.returns:
+                if (
+                    isinstance(returned_unit, Unit)
+                    and returned_unit != unit_desc.returns
+                ):
                     self.errors.append(
                         UnitCheckerError(
                             code="U004",
@@ -311,7 +314,7 @@ class UnitChecker:
 
     def _process_name_expr(
         self, expr: NameExpr, scope: list[str]
-    ) -> Unit | TypeInfo | FuncUnitDescription | None:
+    ) -> Unit | TypeInfo | FuncUnitDescription | Instance | None:
         """Resolve a NameExpr to a Unit, TypeInfo, or FuncUnitDescription."""
         # Variable or symbol lookup
         if isinstance(expr.node, FuncDef):
@@ -322,12 +325,12 @@ class UnitChecker:
             if unit := self._lookup_unit_in_ascending_scopes(expr.name, scope):
                 return unit
             elif isinstance(expr.node, Var) and isinstance(expr.node.type, Instance):
-                return expr.node.type.type
+                return expr.node.type
             return None
 
     def _process_unary_expr(
         self, expr: UnaryExpr, scope: list[str]
-    ) -> Unit | TypeInfo | FuncUnitDescription | None:
+    ) -> Unit | TypeInfo | FuncUnitDescription | Instance | None:
         """Resolve a UnaryExpr to its operand's unit (unary ops do not change units)."""
         return self._infer_unit_from_expr(expr.expr, scope)
 
@@ -369,7 +372,7 @@ class UnitChecker:
 
     def _infer_unit_from_expr(
         self, expr: Expression, scope: list[str]
-    ) -> Unit | TypeInfo | FuncUnitDescription | None:
+    ) -> Unit | TypeInfo | FuncUnitDescription | Instance | None:
         """Recursively infer the unit for a given expression node.
 
         Args:
@@ -400,14 +403,21 @@ class UnitChecker:
 
     def _process_call_expr(
         self, expr: CallExpr, scope: list[str]
-    ) -> Unit | TypeInfo | FuncUnitDescription | None:
+    ) -> Unit | TypeInfo | FuncUnitDescription | Instance | None:
         """Resolve a CallExpr (function or constructor call) to a unit or type."""
         callee = self._infer_unit_from_expr(expr.callee, scope)
         # Argument unit checking for functions
-        if isinstance(callee, FuncUnitDescription):
+        if isinstance(callee, FuncUnitDescription) or isinstance(callee, Instance):
+            func_desc = (
+                callee
+                if isinstance(callee, FuncUnitDescription)
+                else self.function_units.get(f"{callee.type.fullname}.__call__")
+            )
+            if func_desc is None:
+                return None
             for i, arg in enumerate(expr.args):
                 arg_unit = self._infer_unit_from_expr(arg, scope)
-                arg_description = callee.get_arg_by_position(i)
+                arg_description = func_desc.get_arg_by_position(i)
                 if not arg_description:
                     continue
                 expected_unit = arg_description.unit
@@ -421,12 +431,15 @@ class UnitChecker:
                             code="U003",
                             lineno=getattr(expr, "line", 0),
                             message=(
-                                f"Argument {i + 1} to function '{callee.fullname}' "
+                                f"Argument {i + 1} to function '{func_desc.fullname}' "
                                 f"has unit {arg_unit}, expected {expected_unit}"
                             ),
                         )
                     )
-            return callee
+            return func_desc
+        elif isinstance(callee, TypeInfo):
+            # calling a class returns an instance
+            return Instance(callee, [])
         return callee
 
     def _process_member_expr(
@@ -450,17 +463,19 @@ class UnitChecker:
                 elif class_key in self.function_units:
                     # class methods
                     return self.function_units[class_key]
-        if isinstance(base, TypeInfo):
+        elif isinstance(base, TypeInfo) or isinstance(base, Instance):
+            type_ = base if isinstance(base, TypeInfo) else base.type
+
             if unit := self._lookup_unit_in_ascending_scopes(
-                f"{base.name}.{expr.name}", scope
+                f"{type_.name}.{expr.name}", scope
             ):
                 return unit
             elif func_desc := self._lookup_function_in_ascending_scopes(
-                f"{base.name}.{expr.name}", scope
+                f"{type_.name}.{expr.name}", scope
             ):
                 return func_desc
 
-            if (sym_node := base.get(attr)) is not None:
+            if (sym_node := type_.get(attr)) is not None:
                 if isinstance(sym_node.type, CallableType) and isinstance(
                     sym_node.type.ret_type, Instance
                 ):
