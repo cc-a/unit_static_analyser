@@ -6,7 +6,6 @@ from unit_static_analyser.units import Unit
 
 # Define unit instances at module scope
 m_unit = Unit.from_string("m")
-
 s_unit = Unit.from_string("s")
 kg_unit = Unit.from_string("kg")
 
@@ -86,6 +85,26 @@ b = f2(f().a)
     assert checker.units["__main__.b"] == s_unit
     assert_error(checker.errors[0], "U003", "Argument 1 to function 'f2'")
     assert "has unit m, expected s" in checker.errors[0].message
+
+
+def test_function_return_instance():
+    """Test unit lookups when operating on a object returned by a function."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    a: Annotated[int, "m"]
+    def f(self, b: Annotated[int, "m"]) -> Annotated[int, "m"]:
+        return a
+def f() -> A:
+    return A()
+b: Annotated[int, "s"] = 1
+c = f().f(b)
+d = f().a
+""")
+    assert_error(checker.errors[0], "U003", "Argument 1 to function 'A.f'")
+    assert "has unit s, expected m" in checker.errors[0].message
+    assert checker.units["__main__.c"] == m_unit
+    assert checker.units["__main__.d"] == m_unit
 
 
 def test_assignment_instance_attribute():
@@ -455,37 +474,93 @@ b = B().A.a
     assert checker.units["__main__.b"] == m_unit
 
 
-# def test_class_bodies():
-#     checker = run_checker("""
-# from typing import Annotated
-# class A:
-#     a: Annotated[int, "m"]
-#     b: Annotated[int, "s"]
-#     a + b
-# """)
-#     assert checker.units["__main__.A.a"] == m_unit
-#     assert checker.units["__main__.A.b"] == s_unit
-#     assert_error(
-#         checker.errors[0],
-#         "U001",
-#         "Cannot add operands with different units"
-# )
+def test_class_bodies():
+    """Test that expressions in class bodies are evaluated."""
+    checker = run_checker("""
+from typing import Annotated
+class A:
+    a: Annotated[int, "m"]
+    b: Annotated[int, "s"]
+    a + b
+""")
+    assert checker.units["__main__.A.a"] == m_unit
+    assert checker.units["__main__.A.b"] == s_unit
+    assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
 
 
-# def test_class_nested_scope_variable():
-#     checker = run_checker("""
-# from typing import Annotated
-# a: Annotated[int, "m"]
-# class A:
-#     b: Annotated[int, "s"]
-#     def f(self):
-#         c = a + b
-# """)
-#     assert_error(
-#         checker.errors[0],
-#         "U001",
-#         "Cannot add operands with different units"
-# )
+def test_closure_type_lookup():
+    """Test closure scope lookups of classes."""
+    checker = run_checker("""
+from typing import Annotated
+def f():
+    class A:
+        a: Annotated[int, "m"]
+    def f2() -> Annotated[int, "m"]:
+        b = A.a
+        return b
+""")
+    assert not checker.errors
+    assert checker.units["__main__.f.f2.b"] == m_unit
+
+
+def test_closure_instance_lookup():
+    """Test closure scope lookups of instances."""
+    checker = run_checker("""
+from typing import Annotated
+def f() -> None: # annotation required for function variables to be typed
+    class A:
+        a: Annotated[int, "m"]
+    b = A()
+    def f2() -> Annotated[int, "m"]:
+        c = b.a
+        return c
+""")
+    assert not checker.errors
+    assert checker.units["__main__.f.f2.c"] == m_unit
+
+
+def test_closure_function_lookup():
+    """Test closue scope lookup of functions."""
+    checker = run_checker("""
+from typing import Annotated
+def f():
+    def f2() -> Annotated[int, "m"]:
+        a: Annotated[int, "m"]
+        return a
+    def f3() -> Annotated[int, "m"]:
+        b = f2()
+        return b
+""")
+    assert not checker.errors
+    assert checker.units["__main__.f.f3.b"] == m_unit
+
+
+def test_closure_variable_lookup():
+    """Test closure scope lookup of variables."""
+    checker = run_checker("""
+from typing import Annotated
+def f():
+    a: Annotated[int, "m"] = 4
+    def f2() -> Annotated[int, "m"]:
+        b = a
+        return b
+""")
+    assert not checker.errors
+    assert checker.units["__main__.f.a"] == m_unit
+    assert checker.units["__main__.f.f2.b"] == m_unit
+
+
+def test_class_nested_scope_variable():
+    """Test lookup of variables in arbitrarily nested scopes."""
+    checker = run_checker("""
+from typing import Annotated
+a: Annotated[int, "m"]
+class A:
+    b: Annotated[int, "s"]
+    def f(self):
+        c = a + b
+""")
+    assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
 
 
 # def test_module_import():

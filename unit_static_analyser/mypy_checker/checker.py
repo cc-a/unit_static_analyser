@@ -267,6 +267,24 @@ class UnitChecker:
                         )
                     )
 
+    def _lookup_unit_in_ascending_scopes(
+        self, name: str, scope: list[str]
+    ) -> Unit | None:
+        for i in range(len(scope), 0, -1):
+            key = ".".join([*scope[:i], name])
+            if key in self.units:
+                return self.units[key]
+        return None
+
+    def _lookup_function_in_ascending_scopes(
+        self, name: str, scope: list[str]
+    ) -> FuncUnitDescription | None:
+        for i in range(len(scope), 0, -1):
+            key = ".".join([*scope[:i], name])
+            if key in self.function_units:
+                return self.function_units[key]
+        return None
+
     def _process_classdef_stmt(self, stmt: ClassDef, scope: list[str]) -> None:
         """Process a class definition statement and extract/check units."""
         class_name = getattr(stmt, "name", None)
@@ -285,19 +303,15 @@ class UnitChecker:
         """Resolve a NameExpr to a Unit, TypeInfo, or FuncUnitDescription."""
         # Variable or symbol lookup
         if isinstance(expr.node, FuncDef):
-            return self.function_units.get(expr.fullname)
-        elif isinstance(expr.node, Var):
-            key = ".".join([*scope, expr.name])
-            try:
-                return self.units[key]
-            except KeyError:
-                if isinstance(expr.node.type, Instance):
-                    return expr.node.type.type
-            return None
+            return self._lookup_function_in_ascending_scopes(expr.name, scope)
         elif isinstance(expr.node, TypeInfo):
             return expr.node
         else:
-            raise NotImplementedError()
+            if unit := self._lookup_unit_in_ascending_scopes(expr.name, scope):
+                return unit
+            elif isinstance(expr.node, Var) and isinstance(expr.node.type, Instance):
+                return expr.node.type.type
+            return None
 
     def _process_unary_expr(
         self, expr: UnaryExpr, scope: list[str]
@@ -405,28 +419,38 @@ class UnitChecker:
         base = self._infer_unit_from_expr(expr.expr, scope)
         attr = expr.name
 
-        if isinstance(base, FuncUnitDescription | TypeInfo):
-            if isinstance(base, TypeInfo):
-                class_key = f"{base.fullname}.{attr}"
+        if isinstance(base, FuncUnitDescription):
+            if not base.returns:
+                return None
+            elif isinstance(base.returns, Unit):
+                return base.returns
             else:
-                if not base.returns:
-                    return None
-                elif isinstance(base.returns, Unit):
-                    return base.returns
+                # base is a TypeInfo
                 class_key = f"{base.returns.fullname}.{attr}"
-            if class_key in self.units:
-                return self.units[class_key]
-            elif class_key in self.function_units:
-                return self.function_units[class_key]
-            elif isinstance(base, TypeInfo):
-                if (sym_node := base.get(attr)) is not None:
-                    if isinstance(sym_node.type, CallableType) and isinstance(
-                        sym_node.type.ret_type, Instance
-                    ):
-                        # accessing a class that is an attribute of another class
-                        return sym_node.type.ret_type.type
-                    else:
-                        raise NotImplementedError()
+                if class_key in self.units:
+                    # class attributes
+                    return self.units[class_key]
+                elif class_key in self.function_units:
+                    # class methods
+                    return self.function_units[class_key]
+        if isinstance(base, TypeInfo):
+            if unit := self._lookup_unit_in_ascending_scopes(
+                f"{base.name}.{expr.name}", scope
+            ):
+                return unit
+            elif func_desc := self._lookup_function_in_ascending_scopes(
+                f"{base.name}.{expr.name}", scope
+            ):
+                return func_desc
+
+            if (sym_node := base.get(attr)) is not None:
+                if isinstance(sym_node.type, CallableType) and isinstance(
+                    sym_node.type.ret_type, Instance
+                ):
+                    # accessing a class that is an attribute of another class
+                    return sym_node.type.ret_type.type
+                else:
+                    raise NotImplementedError()
         return None
 
     ANNOTATED_TYPE_NAMES = ("typing.Annotated", "typing_extensions.Annotated")
