@@ -5,8 +5,11 @@ from Python code using type annotations and mypy's typed AST.
 """
 
 from dataclasses import dataclass
+from graphlib import TopologicalSorter
+from pathlib import Path
 from typing import Self
 
+from mypy.build import BuildResult, BuildSource, State, build
 from mypy.nodes import (
     AssignmentStmt,
     CallExpr,
@@ -16,6 +19,8 @@ from mypy.nodes import (
     Expression,
     ExpressionStmt,
     FuncDef,
+    Import,
+    ImportFrom,
     MemberExpr,
     MypyFile,
     NameExpr,
@@ -134,7 +139,58 @@ class FuncUnitDescription:
 class UnitChecker:
     """Uses mypy's typed AST to extract and check units."""
 
-    def __init__(self, module_name: str = "__main__") -> None:
+    @staticmethod
+    def _find_py_files_and_modules(paths: list[Path]) -> list[tuple[Path, str]]:
+        """Find all Python files with module names from a list of paths.
+
+        Returns:
+            List of tuples: (absolute file path, module name)
+        """
+        result = []
+        for input_path in paths:
+            input_path = input_path.resolve()
+            if input_path.is_file() and input_path.suffix == ".py":
+                module_name = UnitChecker._module_name_from_path(input_path)
+                result.append((input_path, module_name))
+            elif input_path.is_dir():
+                for file_path in input_path.rglob("*.py"):
+                    file_path = file_path.resolve()
+                    module_name = UnitChecker._module_name_from_path(file_path)
+                    result.append((file_path, module_name))
+        return result
+
+    @staticmethod
+    def _module_name_from_path(file_path: "Path") -> str:
+        """Compute the module name for a Python file, including all parent packages.
+
+        For __init__.py, returns the package name.
+        """
+        # Walk up as long as __init__.py exists, for full package hierarchy
+        if file_path.name == "__init__.py":
+            parts = []
+            current = file_path.parent
+        else:
+            parts = [file_path.with_suffix("").name]
+            current = file_path.parent
+        while (current / "__init__.py").exists():
+            parts.insert(0, current.name)
+            current = current.parent
+        return ".".join(parts)
+
+    @staticmethod
+    def topological_sort_modules(
+        graph: dict[str, State], requested_modules: list[str]
+    ) -> list[str]:
+        """Return a list of module names sorted in dependency order."""
+        ts: TopologicalSorter[str] = TopologicalSorter()
+        for mod, state in graph.items():
+            if mod not in requested_modules:
+                continue
+            deps = [dep for dep in state.dependencies if dep in graph]
+            ts.add(mod, *deps)
+        return list(ts.static_order())
+
+    def __init__(self) -> None:
         """Initialise a new checker.
 
         Args:
@@ -142,17 +198,33 @@ class UnitChecker:
         """
         self.units: dict[str, Unit] = {}
         self.errors: list[UnitCheckerError] = []
-        self.module_name = module_name
         self.function_units: dict[str, FuncUnitDescription] = {}
 
-    def check(self, paths: list[str]) -> None:
+    def check(self, paths: list[Path]) -> None:
         """Run check units annotations on the given file(s) or directory(ies).
 
         Args:
             paths: List of file or directory paths to analyze.
         """
-        from mypy.build import BuildSource, build
+        files_and_modules = self._find_py_files_and_modules(paths)
+        requested_modules = [module_name for _, module_name in files_and_modules]
+        top_level_modules = self._get_top_level_modules(requested_modules)
+        build_result = self._mypy_build(files_and_modules, top_level_modules)
+        module_order = self.topological_sort_modules(
+            build_result.graph, requested_modules
+        )
 
+        for module_name in self._get_modules_for_unit_analysis(
+            module_order, top_level_modules
+        ):
+            if module_name.split(".")[0] not in top_level_modules:
+                continue
+            self._visit_mypy_file(build_result.files[module_name], module_name)
+
+    @staticmethod
+    def _mypy_build(
+        files_and_modules: list[tuple[Path, str]], top_level_modules: set[str]
+    ) -> BuildResult:
         options = Options()
         options.incremental = False
         options.show_traceback = True
@@ -165,19 +237,38 @@ class UnitChecker:
         options.export_types = True
         options.preserve_asts = True
 
-        sources = [BuildSource(path, None, None) for path in paths]
-        result = build(sources=sources, options=options)
+        python_path_roots = set()
+        for file_path, module_name in files_and_modules:
+            python_path_roots.add(
+                Path(*file_path.parts[: -len(module_name.split("."))])
+            )
+        options.mypy_path = [str(path) for path in python_path_roots]
 
-        mypy_file = result.files.get("__main__")
-        if not mypy_file:
-            return
-        self._visit_mypy_file(mypy_file)
+        sources = [
+            BuildSource(str(file), module_name, None)
+            for file, module_name in files_and_modules
+        ]
+        return build(sources=sources, options=options)
 
-    def _visit_mypy_file(self, mypy_file: MypyFile) -> None:
+    @staticmethod
+    def _get_top_level_modules(module_names: list[str]) -> set[str]:
+        return {module_name.split(".")[0] for module_name in module_names}
+
+    @staticmethod
+    def _get_modules_for_unit_analysis(
+        module_order: list[str], top_level_modules: set[str]
+    ) -> list[str]:
+        return [
+            module_name
+            for module_name in module_order
+            if module_name.split(".")[0] in top_level_modules
+        ]
+
+    def _visit_mypy_file(self, mypy_file: MypyFile, module_name: str) -> None:
         """Visit all top-level statements in the module."""
         self.module_symbol_table = mypy_file.names
         for stmt in mypy_file.defs:
-            self._visit_stmt(stmt, scope=[self.module_name])
+            self._visit_stmt(stmt, scope=[module_name])
 
     def _visit_stmt(self, stmt: Statement, scope: list[str]) -> None:
         """Visit a statement and extract/check units as appropriate."""
@@ -190,8 +281,40 @@ class UnitChecker:
                 self._process_classdef_stmt(stmt, scope)
             case ExpressionStmt():
                 self._process_expression_stmt(stmt, scope)
+            case ImportFrom():
+                self._process_import_from_stmt(stmt, scope)
+            case Import():
+                self._process_import_stmt(stmt, scope)
             case _:
                 pass
+
+    def _process_import_from_stmt(self, stmt: ImportFrom, scope: list[str]) -> None:
+        """Process an ImportFrom statement and update units/types for imported names."""
+        module = stmt.id
+        for name, as_name in stmt.names:
+            imported_name = as_name or name
+            key = f"{module}.{name}"
+            # Try to find the unit/type in the source module
+            if key in self.units:
+                self.units[".".join([*scope, imported_name])] = self.units[key]
+            elif key in self.function_units:
+                self.function_units[".".join([*scope, imported_name])] = (
+                    self.function_units[key]
+                )
+
+    def _process_import_stmt(self, stmt: Import, scope: list[str]) -> None:
+        """Process an Import statement and update units/types for imported modules."""
+        for module, as_name in stmt.ids:
+            imported_name = as_name or module
+            # Map the imported module name in the current scope to its full module name
+            # This allows resolving e.g. b.x if 'import a as b'
+            for key, value in list(self.units.items()):
+                key_parts = key.split(".")
+                if key_parts[0] == module:
+                    self.units[".".join([*scope, imported_name, *key_parts[1:]])] = (
+                        value
+                    )
+            # self.units[".".join([*scope, imported_name])] = module
 
     def _process_assignment_stmt(self, stmt: AssignmentStmt, scope: list[str]) -> None:
         """Process an assignment statement and extract/check units."""

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from mypy.nodes import TypeInfo
 
@@ -9,10 +11,15 @@ m_unit = Unit.from_string("m")
 s_unit = Unit.from_string("s")
 kg_unit = Unit.from_string("kg")
 
+TEST_MODULE_NAME = "test_module"
 
-def run_checker(
-    code: str, tmp_path, module_name="__main__", external_units=None
-) -> UnitChecker:
+
+def check_unit(checker: UnitChecker, obj_path: str, unit: Unit):
+    """Helper function for checking a unit in the test module."""
+    assert checker.units[f"{TEST_MODULE_NAME}.{obj_path}"] == unit
+
+
+def run_checker(code: str, tmp_path: Path) -> UnitChecker:
     """Run the UnitChecker on the given code using a temp file via pytest's tmp_path.
 
     Args:
@@ -24,12 +31,10 @@ def run_checker(
     Returns:
         The UnitChecker instance after analysis.
     """
-    file_path = tmp_path / "test_module.py"
+    file_path = tmp_path / f"{TEST_MODULE_NAME}.py"
     file_path.write_text(code)
-    checker = UnitChecker(module_name=module_name)
-    checker.check([str(file_path)])
-    if external_units:
-        checker.units.update(external_units)
+    checker = UnitChecker()
+    checker.check([file_path])
     return checker
 
 
@@ -102,7 +107,7 @@ b = f().a
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == m_unit
+    check_unit(checker, "b", m_unit)
 
 
 def test_assignment_arbitrary_expression2(tmp_path):
@@ -118,7 +123,7 @@ b = f().a
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == m_unit
+    check_unit(checker, "b", m_unit)
 
 
 def test_assignment_arbitrary_expression3(tmp_path):
@@ -136,7 +141,7 @@ b = f2(f().a)
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == s_unit
+    check_unit(checker, "b", s_unit)
     assert_error(checker.errors[0], "U003", "Argument 1 to function 'f2'")
     assert "has unit m, expected s" in checker.errors[0].message
 
@@ -160,8 +165,8 @@ d = f().a
     )
     assert_error(checker.errors[0], "U003", "Argument 1 to function 'A.f'")
     assert "has unit s, expected m" in checker.errors[0].message
-    assert checker.units["__main__.c"] == m_unit
-    assert checker.units["__main__.d"] == m_unit
+    check_unit(checker, "c", m_unit)
+    check_unit(checker, "d", m_unit)
 
 
 def test_assignment_instance_attribute(tmp_path):
@@ -177,8 +182,8 @@ c = A().a
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == m_unit
-    assert checker.units["__main__.c"] == m_unit
+    check_unit(checker, "b", m_unit)
+    check_unit(checker, "c", m_unit)
 
 
 def test_assignment_member_access(tmp_path):
@@ -192,7 +197,7 @@ b = A.a
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == m_unit
+    check_unit(checker, "b", m_unit)
 
 
 def test_assignment_function_call(tmp_path):
@@ -206,7 +211,7 @@ b = f()
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == m_unit
+    check_unit(checker, "b", m_unit)
 
 
 def test_assignment_class_init_member_access(tmp_path):
@@ -220,7 +225,7 @@ b = A().a
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == m_unit
+    check_unit(checker, "b", m_unit)
 
 
 def test_assignment_alias(tmp_path):
@@ -233,7 +238,7 @@ b = a
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == m_unit
+    check_unit(checker, "b", m_unit)
 
 
 def test_assignment(tmp_path):
@@ -245,7 +250,7 @@ a: Annotated[int, "m"] = 1
 """,
         tmp_path,
     )
-    assert checker.units["__main__.a"] == m_unit
+    check_unit(checker, "a", m_unit)
 
 
 def test_addition(tmp_path):
@@ -260,7 +265,7 @@ c = a + b
         tmp_path,
     )
     for name in ("a", "b", "c"):
-        assert checker.units[f"__main__.{name}"] == m_unit
+        check_unit(checker, name, m_unit)
     assert not checker.errors
 
 
@@ -289,7 +294,7 @@ c = a / b
 """,
         tmp_path,
     )
-    assert checker.units["__main__.c"] == Unit.from_string("m.s^-1")
+    check_unit(checker, "c", Unit.from_string("m.s^-1"))
 
 
 def test_disallow_missing_units(tmp_path):
@@ -316,7 +321,7 @@ b = {symbol}a
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == m_unit
+    check_unit(checker, "b", m_unit)
 
 
 def test_expression_instance_method(tmp_path):
@@ -332,7 +337,7 @@ b = A().f()
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == m_unit
+    check_unit(checker, "b", m_unit)
 
 
 def test_expression_nested_function_call_mismatch(tmp_path):
@@ -350,7 +355,7 @@ a = f2(f1())
         tmp_path,
     )
     assert_error(checker.errors[0], "U003", "Argument 1 to function 'f2'")
-    assert checker.units["__main__.a"] == m_unit
+    check_unit(checker, "a", m_unit)
 
 
 def test_expression_function_call_attribute_mismatch(tmp_path):
@@ -397,8 +402,8 @@ b = f(a)
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == m_unit
-    func_units = checker.function_units["__main__.f"]
+    check_unit(checker, "b", m_unit)
+    func_units = checker.function_units[f"{TEST_MODULE_NAME}.f"]
     assert isinstance(func_units.returns, Unit)
     assert func_units.returns == m_unit
 
@@ -416,7 +421,7 @@ b = A().f(a)
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == m_unit
+    check_unit(checker, "b", m_unit)
 
 
 def test_expression_function_args_mismatch(tmp_path):
@@ -463,7 +468,7 @@ def f():
 """,
         tmp_path,
     )
-    assert "__main__.f" not in checker.function_units
+    assert f"{TEST_MODULE_NAME}.f" not in checker.function_units
 
 
 def test_function_return_type_no_unit(tmp_path):
@@ -477,7 +482,7 @@ def f() -> int:
         tmp_path,
     )
 
-    ret_value = checker.function_units["__main__.f"]
+    ret_value = checker.function_units[f"{TEST_MODULE_NAME}.f"]
     assert isinstance(ret_value, FuncUnitDescription)
     assert ret_value.returns
     assert isinstance(ret_value.returns, TypeInfo)
@@ -552,8 +557,8 @@ def f():
 """,
         tmp_path,
     )
-    assert checker.units["__main__.f.a"] == m_unit
-    assert checker.units["__main__.f.b"] == s_unit
+    check_unit(checker, "f.a", m_unit)
+    check_unit(checker, "f.b", s_unit)
     assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
 
 
@@ -595,7 +600,7 @@ def f(a: Annotated[int, "m"]):
 """,
         tmp_path,
     )
-    assert checker.units["__main__.f.a"] == m_unit
+    check_unit(checker, "f.a", m_unit)
 
 
 def test_class_chaining(tmp_path):
@@ -612,7 +617,7 @@ b = B().A.a
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == m_unit
+    check_unit(checker, "b", m_unit)
 
 
 def test_class_bodies(tmp_path):
@@ -627,8 +632,10 @@ class A:
 """,
         tmp_path,
     )
-    assert checker.units["__main__.A.a"] == m_unit
-    assert checker.units["__main__.A.b"] == s_unit
+    check_unit(checker, "A.a", m_unit)
+    check_unit(checker, "A.b", s_unit)
+    # assert checker.units["__main__.A.a"] == m_unit
+    # assert checker.units["__main__.A.b"] == s_unit
     assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
 
 
@@ -647,7 +654,7 @@ def f():
         tmp_path,
     )
     assert not checker.errors
-    assert checker.units["__main__.f.f2.b"] == m_unit
+    check_unit(checker, "f.f2.b", m_unit)
 
 
 def test_closure_instance_lookup(tmp_path):
@@ -666,7 +673,7 @@ def f() -> None: # annotation required for function variables to be typed
         tmp_path,
     )
     assert not checker.errors
-    assert checker.units["__main__.f.f2.c"] == m_unit
+    check_unit(checker, "f.f2.c", m_unit)
 
 
 def test_closure_function_lookup(tmp_path):
@@ -685,7 +692,7 @@ def f():
         tmp_path,
     )
     assert not checker.errors
-    assert checker.units["__main__.f.f3.b"] == m_unit
+    check_unit(checker, "f.f3.b", m_unit)
 
 
 def test_closure_variable_lookup(tmp_path):
@@ -702,8 +709,8 @@ def f():
         tmp_path,
     )
     assert not checker.errors
-    assert checker.units["__main__.f.a"] == m_unit
-    assert checker.units["__main__.f.f2.b"] == m_unit
+    check_unit(checker, "f.a", m_unit)
+    check_unit(checker, "f.f2.b", m_unit)
 
 
 def test_class_nested_scope_variable(tmp_path):
@@ -739,7 +746,7 @@ e if a > b else d      # fine - e and d both have no unit
 """,
         tmp_path,
     )
-    assert checker.units["__main__.f"] == m_unit
+    check_unit(checker, "f", m_unit)
     assert_error_u007(checker.errors[0], m_unit, s_unit, lineno=9)
     assert_error_u008(checker.errors[1], lineno=10)
     assert len(checker.errors) == 2
@@ -805,9 +812,9 @@ c = A().a
 """,
         tmp_path,
     )
-    assert checker.units["__main__.A.a"] == m_unit
-    assert checker.units["__main__.b"] == m_unit
-    assert checker.units["__main__.c"] == m_unit
+    check_unit(checker, "A.a", m_unit)
+    check_unit(checker, "b", m_unit)
+    check_unit(checker, "c", m_unit)
 
 
 def test_class_self_lookup(tmp_path):
@@ -825,7 +832,7 @@ class A:
 """,
         tmp_path,
     )
-    assert checker.units["__main__.A.d"] == m_unit
+    check_unit(checker, "A.d", m_unit)
     assert_error(
         checker.errors[0], "U001", "Cannot add operands with different units", lineno=9
     )
@@ -846,8 +853,8 @@ c = A()()
 """,
         tmp_path,
     )
-    assert checker.units["__main__.b"] == m_unit
-    assert checker.units["__main__.c"] == m_unit
+    check_unit(checker, "b", m_unit)
+    check_unit(checker, "c", m_unit)
 
 
 def test_call_instance_error(tmp_path):
@@ -868,3 +875,106 @@ c = A()(arg)
     assert checker.errors
     assert_error(checker.errors[0], "U003", "Argument 1 to function 'A.__call__'")
     assert "has unit s, expected m" in checker.errors[0].message
+
+
+def test_multi_file_analysis_import_from(tmp_path):
+    """Test that units are correctly propagated across multiple files with imports."""
+    # Write first file
+    file1 = tmp_path / "a.py"
+    file1.write_text("""
+from typing import Annotated
+x: Annotated[int, "m"] = 1
+""")
+
+    # Write second file
+    file2 = tmp_path / "b.py"
+    file2.write_text("""
+from a import x
+y = x
+""")
+
+    # Analyze both files together
+    checker = UnitChecker()
+    checker.check([file1, file2])
+
+    # Now you can assert units for symbols in both files
+    assert checker.units["a.x"] == m_unit
+    assert checker.units["b.y"] == m_unit
+
+
+def test_multi_file_analysis_import_from_as(tmp_path):
+    """Test multi-file analysis with import from with aliasing."""
+    # Write first file
+    file1 = tmp_path / "a.py"
+    file1.write_text("""
+from typing import Annotated
+x: Annotated[int, "m"] = 1
+""")
+
+    # Write second file
+    file2 = tmp_path / "b.py"
+    file2.write_text("""
+from a import x as altx
+y = altx
+""")
+
+    # Analyze both files together
+    checker = UnitChecker()
+    checker.check([file1, file2])
+
+    # Now you can assert units for symbols in both files
+    assert checker.units["a.x"] == m_unit
+    assert checker.units["b.altx"] == m_unit
+    assert checker.units["b.y"] == m_unit
+
+
+@pytest.mark.xfail
+def test_multi_file_analysis_import(tmp_path):
+    """Test that units are correctly propagated through imports."""
+    # Write first file
+    file1 = tmp_path / "a.py"
+    file1.write_text("""
+from typing import Annotated
+x: Annotated[int, "m"] = 1
+""")
+
+    # Write second file
+    file2 = tmp_path / "b.py"
+    file2.write_text("""
+import a
+y = a.x
+""")
+
+    # Analyze both files together
+    checker = UnitChecker()
+    checker.check([file1, file2])
+
+    # Now you can assert units for symbols in both files
+    assert checker.units["a.x"] == m_unit
+    assert checker.units["b.y"] == m_unit
+
+
+@pytest.mark.xfail
+def test_multi_file_analysis_import_as(tmp_path):
+    """Test multi-file analysis with import as syntax."""
+    # Write first file
+    file1 = tmp_path / "a.py"
+    file1.write_text("""
+from typing import Annotated
+x: Annotated[int, "m"] = 1
+""")
+
+    # Write second file
+    file2 = tmp_path / "b.py"
+    file2.write_text("""
+import a as alt
+y = alt.x
+""")
+
+    # Analyze both files together
+    checker = UnitChecker()
+    checker.check([file1, file2])
+
+    # Now you can assert units for symbols in both files
+    assert checker.units["a.x"] == m_unit
+    assert checker.units["b.y"] == m_unit
