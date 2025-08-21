@@ -3,6 +3,9 @@ from pathlib import Path
 import pytest
 
 from unit_static_analyser.mypy_checker.checker import UnitChecker
+from unit_static_analyser.units import Unit
+
+m_unit = Unit.from_string("m")
 
 
 def test_file(tmp_path: Path):
@@ -101,12 +104,12 @@ def test_package_dependency(tmp_path: Path, package_files: dict[str, Path]):
     # Add a dependency on pkg.sub2.file2
     file1_module = "pkg.sub1.file1"
     file1_path = package_files[file1_module]
-    file1_path.write_text("from ..sub2.file2 import a\n")
+    (tmp_path / file1_path).write_text("from ..sub2.file2 import a\n")
 
     # Add something to import to pkg2.sub2.file2
     file2_module = "pkg.sub2.file2"
     file2_path = package_files[file2_module]
-    file2_path.write_text("a: int = 4\n")
+    (tmp_path / file2_path).write_text("a: int = 4\n")
 
     # run through the file discover and processing steps
     files_and_modules = UnitChecker._find_py_files_and_modules([tmp_path / file1_path])
@@ -122,3 +125,165 @@ def test_package_dependency(tmp_path: Path, package_files: dict[str, Path]):
 
     # ensure both files are checked with file2 before file1
     assert modules_to_check == [file2_module, file1_module]
+
+
+def check_unit(
+    checker: UnitChecker,
+    obj_path: str,
+    unit: Unit,
+):
+    """Helper function for checking a unit in the test module."""
+    for var, var_unit in checker.var_units.items():
+        if var.fullname == f"{obj_path}":
+            assert unit == var_unit
+            break
+    else:
+        raise ValueError(f"Missing unit - {obj_path}")
+
+
+def test_multi_file_analysis_import_from(
+    tmp_path: Path, package_files: dict[str, Path]
+):
+    """Test that units are correctly propagated across multiple files with imports."""
+    file1 = package_files["pkg.sub1.file1"]
+    (tmp_path / file1).write_text("""
+from typing import Annotated
+x: Annotated[int, "m"] = 1
+""")
+
+    file2 = package_files["pkg.sub2.file2"]
+    (tmp_path / file2).write_text("""
+from pkg.sub1.file1 import x
+y = x
+""")
+
+    # Analyze both files together
+    checker = UnitChecker()
+    checker.check([tmp_path / file1, tmp_path / file2])
+
+    # Now you can assert units for symbols in both files
+    check_unit(checker, "pkg.sub1.file1.x", m_unit)
+    check_unit(checker, "pkg.sub2.file2.y", m_unit)
+
+
+def test_multi_file_analysis_import_from_relative(
+    tmp_path: Path, package_files: dict[str, Path]
+):
+    """Test that units are correctly propagated across multiple files with imports."""
+    file1 = package_files["pkg.sub1.file1"]
+    (tmp_path / file1).write_text("""
+from typing import Annotated
+x: Annotated[int, "m"] = 1
+""")
+
+    file2 = package_files["pkg.sub2.file2"]
+    (tmp_path / file2).write_text("""
+from ..sub1.file1 import x
+y = x
+""")
+
+    # Analyze both files together
+    checker = UnitChecker()
+    checker.check([tmp_path / file1, tmp_path / file2])
+
+    # Now you can assert units for symbols in both files
+    check_unit(checker, "pkg.sub1.file1.x", m_unit)
+    check_unit(checker, "pkg.sub2.file2.y", m_unit)
+
+
+def test_multi_file_analysis_import_from_class(
+    tmp_path: Path, package_files: dict[str, Path]
+):
+    """Test that units are correctly propagated across multiple files with imports."""
+    file1 = package_files["pkg.sub1.file1"]
+    (tmp_path / file1).write_text("""
+from typing import Annotated
+class A:
+    a: Annotated[int, "m"] = 1
+""")
+
+    file2 = package_files["pkg.sub2.file2"]
+    (tmp_path / file2).write_text("""
+from ..sub1.file1 import A
+y = A.a
+""")
+
+    # Analyze both files together
+    checker = UnitChecker()
+    checker.check([tmp_path / file1, tmp_path / file2])
+
+    check_unit(checker, "pkg.sub1.file1.A.a", m_unit)
+    check_unit(checker, "pkg.sub2.file2.y", m_unit)
+
+
+def test_multi_file_analysis_import_from_as(
+    tmp_path: Path, package_files: dict[str, Path]
+):
+    """Test that units are correctly propagated across multiple files with imports."""
+    file1 = package_files["pkg.sub1.file1"]
+    (tmp_path / file1).write_text("""
+from typing import Annotated
+x: Annotated[int, "m"] = 1
+""")
+
+    file2 = package_files["pkg.sub2.file2"]
+    (tmp_path / file2).write_text("""
+from pkg.sub1.file1 import x as altx
+y = altx
+""")
+
+    # Analyze both files together
+    checker = UnitChecker()
+    checker.check([tmp_path / file1, tmp_path / file2])
+
+    # Now you can assert units for symbols in both files
+    check_unit(checker, "pkg.sub1.file1.x", m_unit)
+    check_unit(checker, "pkg.sub2.file2.y", m_unit)
+
+
+def test_multi_file_analysis_import(tmp_path: Path, package_files: dict[str, Path]):
+    """Test that units are correctly propagated through imports."""
+    file1 = package_files["pkg.sub1.file1"]
+    (tmp_path / file1).write_text("""
+from typing import Annotated
+x: Annotated[int, "m"] = 1
+""")
+
+    file2 = package_files["pkg.sub2.file2"]
+    (tmp_path / file2).write_text("""
+import pkg.sub1.file1
+y = pkg.sub1.file1.x
+""")
+
+    # Analyze both files together
+    checker = UnitChecker()
+    checker.check([tmp_path / file1, tmp_path / file2])
+
+    # Now you can assert units for symbols in both files
+    check_unit(checker, "pkg.sub1.file1.x", m_unit)
+    check_unit(checker, "pkg.sub2.file2.y", m_unit)
+
+
+def test_multi_file_analysis_import_as(tmp_path: Path, package_files: dict[str, Path]):
+    """Test multi-file analysis with import as syntax."""
+    # Write first file
+    file1 = package_files["pkg.sub1.file1"]
+    (tmp_path / file1).write_text("""
+from typing import Annotated
+x: Annotated[int, "m"] = 1
+""")
+
+    # Write second file
+    file2 = package_files["pkg.sub2.file2"]
+    (tmp_path / file2).write_text("""
+import pkg.sub1.file1 as alt
+y = alt.x
+""")
+
+    # Analyze both files together
+    checker = UnitChecker()
+    checker.check([tmp_path / file1, tmp_path / file2])
+
+    # Now you can assert units for symbols in both files
+    check_unit(checker, "pkg.sub1.file1.x", m_unit)
+    check_unit(checker, "pkg.sub2.file2.y", m_unit)
