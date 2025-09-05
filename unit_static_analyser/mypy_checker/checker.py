@@ -30,7 +30,7 @@ from mypy.nodes import (
     Var,
 )
 from mypy.options import Options
-from mypy.types import CallableType, Instance, UnboundType
+from mypy.types import CallableType, Instance, RawExpressionType, UnboundType
 
 from unit_static_analyser.units import Unit
 
@@ -88,10 +88,16 @@ class FuncUnitDescription:
         ret_unit: Unit | TypeInfo | None = None
         if isinstance(unanalyzed_type.ret_type, UnboundType):
             if (ret_type := unanalyzed_type.ret_type).name == "Annotated":
-                if not isinstance(ret_type.args[1], UnboundType):
+                if (
+                    not isinstance(ret_type.args[1], RawExpressionType)
+                    or not isinstance(ret_type.args[1].literal_value, str)
+                    or not ret_type.args[1].literal_value.startswith("unit:")
+                ):
                     return None
                 try:
-                    ret_unit = Unit.from_string(ret_type.args[1].name)
+                    ret_unit = Unit.from_string(
+                        ret_type.args[1].literal_value.removeprefix("unit:")
+                    )
                 except IndexError:
                     return None
             else:
@@ -112,8 +118,11 @@ class FuncUnitDescription:
                 offset = 1
                 continue
             if getattr(arg_type, "name", None) == "Annotated":
-                if not isinstance(arg_type, UnboundType) or not isinstance(
-                    arg_type.args[1], UnboundType
+                if (
+                    not isinstance(arg_type, UnboundType)
+                    or not isinstance(arg_type.args[1], RawExpressionType)
+                    or not isinstance(arg_type.args[1].literal_value, str)
+                    or not arg_type.args[1].literal_value.startswith("unit:")
                 ):
                     continue
                 try:
@@ -121,7 +130,9 @@ class FuncUnitDescription:
                     arg_units[arg_name] = FuncArgDescription(
                         position=unanalyzed_type.arg_names.index(arg_name) - offset,
                         name=arg_name,
-                        unit=Unit.from_string(arg_type.args[1].name),
+                        unit=Unit.from_string(
+                            arg_type.args[1].literal_value.removeprefix("unit:")
+                        ),
                     )
                 except ValueError:
                     pass
@@ -522,14 +533,17 @@ class UnitChecker:
         Returns:
             The extracted Unit if the type is Annotated, otherwise None.
         """
-        if (
-            type_ := getattr(stmt, "unanalyzed_type", None)
-        ) and type_.name == "Annotated":
-            try:
-                return Unit.from_string(type_.args[1].name)
-            except IndexError:
+        type_ = stmt.unanalyzed_type
+        if not isinstance(type_, UnboundType):
+            return None
+        if type_.name == "Annotated":
+            arg = type_.args[1]
+            if not isinstance(arg, RawExpressionType) or not isinstance(
+                arg.literal_value, str
+            ):
                 return None
-
+            if arg.literal_value.startswith("unit:"):
+                return Unit.from_string(arg.literal_value.removeprefix("unit:"))
         return None
 
     def _process_comparison_expr(self, expr: ComparisonExpr) -> None:

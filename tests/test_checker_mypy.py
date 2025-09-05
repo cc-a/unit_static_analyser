@@ -110,7 +110,7 @@ def test_assignment_arbitrary_expression(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    a: Annotated[int, "m"]
+    a: Annotated[int, "unit:m"]
 def f() -> A:
     return A()
 b = f().a
@@ -126,7 +126,7 @@ def test_assignment_arbitrary_expression2(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    a: Annotated[int, "m"]
+    a: Annotated[int, "unit:m"]
 def f() -> A:
     return A
 b = f().a
@@ -142,10 +142,10 @@ def test_assignment_arbitrary_expression3(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    a: Annotated[int, "m"]
+    a: Annotated[int, "unit:m"]
 def f() -> A:
     return A
-def f2(a: Annotated[int, "s"]) -> Annotated[int, "s"]:
+def f2(a: Annotated[int, "unit:s"]) -> Annotated[int, "unit:s"]:
     return a
 b = f2(f().a)
 """,
@@ -162,12 +162,12 @@ def test_function_return_instance(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    a: Annotated[int, "m"]
-    def f(self, b: Annotated[int, "m"]) -> Annotated[int, "m"]:
+    a: Annotated[int, "unit:m"]
+    def f(self, b: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
         return a
 def f() -> A:
     return A()
-b: Annotated[int, "s"] = 1
+b: Annotated[int, "unit:s"] = 1
 c = f().f(b)
 d = f().a
 """,
@@ -185,7 +185,7 @@ def test_assignment_instance_attribute(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    a: Annotated[int, "m"]
+    a: Annotated[int, "unit:m"]
 a = A()
 b = a.a
 c = A().a
@@ -202,7 +202,7 @@ def test_assignment_member_access(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    a: Annotated[int, "m"]
+    a: Annotated[int, "unit:m"]
 b = A.a
 """,
         tmp_path,
@@ -215,8 +215,8 @@ def test_assignment_function_call(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-def f() -> Annotated[int, "m"]:
-    a: Annotated[int, "m"]
+def f() -> Annotated[int, "unit:m"]:
+    a: Annotated[int, "unit:m"]
 b = f()
 """,
         tmp_path,
@@ -230,7 +230,7 @@ def test_assignment_class_init_member_access(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    a: Annotated[int, "m"]
+    a: Annotated[int, "unit:m"]
 b = A().a
 """,
         tmp_path,
@@ -243,7 +243,7 @@ def test_assignment_alias(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-a: Annotated[int, "m"]
+a: Annotated[int, "unit:m"]
 b = a
 """,
         tmp_path,
@@ -256,7 +256,7 @@ def test_assignment(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-a: Annotated[int, "m"] = 1
+a: Annotated[int, "unit:m"] = 1
 """,
         tmp_path,
     )
@@ -268,8 +268,8 @@ def test_addition(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-a: Annotated[int, "m"] = 1
-b: Annotated[int, "m"] = 2
+a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:m"] = 2
 c = a + b
 """,
         tmp_path,
@@ -284,8 +284,8 @@ def test_addition_error(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-a: Annotated[int, "m"] = 1
-b: Annotated[int, "s"] = 2
+a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:s"] = 2
 c = a + b
 """,
         tmp_path,
@@ -300,8 +300,8 @@ def test_division_ok(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-a: Annotated[int, "m"] = 1
-b: Annotated[int, "s"] = 2
+a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:s"] = 2
 c = a / b
 """,
         tmp_path,
@@ -314,7 +314,7 @@ def test_disallow_missing_units(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-a: Annotated[int, "m"] = 1
+a: Annotated[int, "unit:m"] = 1
 b = a + 4
 """,
         tmp_path,
@@ -328,7 +328,7 @@ def test_expression_unary(symbol: str, tmp_path: Path):
     checker = run_checker(
         f"""
 from typing import Annotated
-a: Annotated[int, "m"] = 1
+a: Annotated[int, "unit:m"] = 1
 b = {symbol}a
 """,
         tmp_path,
@@ -342,8 +342,8 @@ def test_expression_instance_method(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    a: Annotated[int, "m"] = 1
-    def f(self) -> Annotated[int, "m"]:
+    a: Annotated[int, "unit:m"] = 1
+    def f(self) -> Annotated[int, "unit:m"]:
         return self.a
 b = A().f()
 """,
@@ -357,10 +357,10 @@ def test_expression_nested_function_call_mismatch(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-def f1() -> Annotated[int, "s"]:
-    a: Annotated[int, "s"]
+def f1() -> Annotated[int, "unit:s"]:
+    a: Annotated[int, "unit:s"]
     return a
-def f2(a: Annotated[int, "m"]) -> Annotated[int, "m"]:
+def f2(a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
     return a
 a = f2(f1())
 """,
@@ -376,8 +376,8 @@ def test_expression_function_call_attribute_mismatch(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    a: Annotated[int, "s"]
-def f(a: Annotated[int, "m"]) -> Annotated[int, "m"]:
+    a: Annotated[int, "unit:s"]
+def f(a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
     return a
 a = f(A.a)
 """,
@@ -392,8 +392,8 @@ def test_expression_function_call_instance_attribute_mismatch(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    a: Annotated[int, "s"]
-def f(a: Annotated[int, "m"]) -> Annotated[int, "m"]:
+    a: Annotated[int, "unit:s"]
+def f(a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
     return a
 a = f(A().a)
 """,
@@ -407,9 +407,9 @@ def test_expression_function_args(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-def f(a: Annotated[int, "m"]) -> Annotated[int, "m"]:
+def f(a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
     return a
-a: Annotated[int, "m"] = 1
+a: Annotated[int, "unit:m"] = 1
 b = f(a)
 """,
         tmp_path,
@@ -427,9 +427,9 @@ def test_expression_method_args(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    def f(self, a: Annotated[int, "m"]) -> Annotated[int, "m"]:
+    def f(self, a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
         return a
-a: Annotated[int, "m"] = 1
+a: Annotated[int, "unit:m"] = 1
 b = A().f(a)
 """,
         tmp_path,
@@ -442,9 +442,9 @@ def test_expression_function_args_mismatch(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-def f(a: Annotated[int, "m"]) -> Annotated[int, "m"]:
+def f(a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
     return a
-a: Annotated[int, "s"] = 1
+a: Annotated[int, "unit:s"] = 1
 b = f(a)
 """,
         tmp_path,
@@ -460,9 +460,9 @@ def test_method_args_mismatch(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    def f(self, a: Annotated[int, "m"]) -> Annotated[int, "m"]:
+    def f(self, a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
         return a
-a: Annotated[int, "s"] = 1
+a: Annotated[int, "unit:s"] = 1
 b = A().f(a)
 """,
         tmp_path,
@@ -475,7 +475,6 @@ def test_function_no_return_type(tmp_path: Path):
     """Test that functions without a return type annotation are handled gracefully."""
     checker = run_checker(
         """
-from typing import Annotated
 def f():
     pass
 """,
@@ -488,7 +487,6 @@ def test_function_return_type_no_unit(tmp_path: Path):
     """Test functions with non-unit return types are handled."""
     checker = run_checker(
         """
-from typing import Annotated
 def f() -> int:
     pass
 """,
@@ -507,8 +505,8 @@ def test_function_return_type_wrong_unit(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-def f() -> Annotated[int, "m"]:
-    a: Annotated[int, "s"]
+def f() -> Annotated[int, "unit:m"]:
+    a: Annotated[int, "unit:s"]
     return a
 """,
         tmp_path,
@@ -526,11 +524,11 @@ def test_function_return_type_wrong_unit_nested(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-def f() -> Annotated[int, "m"]:
-    def f2() -> Annotated[int, "s"]:
-        a2: Annotated[int, "m"]
+def f() -> Annotated[int, "unit:m"]:
+    def f2() -> Annotated[int, "unit:s"]:
+        a2: Annotated[int, "unit:m"]
         return a2
-    a: Annotated[int, "m"]
+    a: Annotated[int, "unit:m"]
     return a
 """,
         tmp_path,
@@ -565,8 +563,8 @@ def test_function_bodies(tmp_path: Path):
         """
 from typing import Annotated
 def f():
-    a: Annotated[int, "m"]
-    b: Annotated[int, "s"]
+    a: Annotated[int, "unit:m"]
+    b: Annotated[int, "unit:s"]
     c = a + b
 """,
         tmp_path,
@@ -583,8 +581,8 @@ def test_function_scope_lookup(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-a: Annotated[int, "m"]
-def f() -> Annotated[int, "s"]:
+a: Annotated[int, "unit:m"]
+def f() -> Annotated[int, "unit:s"]:
     return a
 """,
         tmp_path,
@@ -597,8 +595,8 @@ def test_bare_expression(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-a: Annotated[int, "m"]
-b: Annotated[int, "s"]
+a: Annotated[int, "unit:m"]
+b: Annotated[int, "unit:s"]
 a + b
 """,
         tmp_path,
@@ -627,10 +625,10 @@ def test_class_chaining(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    a: Annotated[int, "m"]
+    a: Annotated[int, "unit:m"]
 class B:
     A = A
-    b: Annotated[int, "m"]
+    b: Annotated[int, "unit:m"]
 b = B().A.a
 """,
         tmp_path,
@@ -644,8 +642,8 @@ def test_class_bodies(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    a: Annotated[int, "m"]
-    b: Annotated[int, "s"]
+    a: Annotated[int, "unit:m"]
+    b: Annotated[int, "unit:s"]
     a + b
 """,
         tmp_path,
@@ -664,8 +662,8 @@ def test_closure_type_lookup(tmp_path: Path):
 from typing import Annotated
 def f():
     class A:
-        a: Annotated[int, "m"]
-    def f2() -> Annotated[int, "m"]:
+        a: Annotated[int, "unit:m"]
+    def f2() -> Annotated[int, "unit:m"]:
         b = A.a
         return b
 """,
@@ -682,9 +680,9 @@ def test_closure_instance_lookup(tmp_path: Path):
 from typing import Annotated
 def f() -> None: # annotation required for function variables to be typed
     class A:
-        a: Annotated[int, "m"]
+        a: Annotated[int, "unit:m"]
     b = A()
-    def f2() -> Annotated[int, "m"]:
+    def f2() -> Annotated[int, "unit:m"]:
         c = b.a
         return c
 """,
@@ -700,10 +698,10 @@ def test_closure_function_lookup(tmp_path: Path):
         """
 from typing import Annotated
 def f():
-    def f2() -> Annotated[int, "m"]:
+    def f2() -> Annotated[int, "unit:m"]:
         a: Annotated[int, "m"]
         return a
-    def f3() -> Annotated[int, "m"]:
+    def f3() -> Annotated[int, "unit:m"]:
         b = f2()
         return b
 """,
@@ -719,8 +717,8 @@ def test_closure_variable_lookup(tmp_path: Path):
         """
 from typing import Annotated
 def f():
-    a: Annotated[int, "m"] = 4
-    def f2() -> Annotated[int, "m"]:
+    a: Annotated[int, "unit:m"] = 4
+    def f2() -> Annotated[int, "unit:m"]:
         b = a
         return b
 """,
@@ -736,9 +734,9 @@ def test_class_nested_scope_variable(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-a: Annotated[int, "m"]
+a: Annotated[int, "unit:m"]
 class A:
-    b: Annotated[int, "s"]
+    b: Annotated[int, "unit:s"]
     def f(self) -> None:
         c = a + self.b
 """,
@@ -754,9 +752,9 @@ def test_if_else_expr(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-a: Annotated[int, "m"]
-b: Annotated[int, "m"]
-c: Annotated[int, "s"]
+a: Annotated[int, "unit:m"]
+b: Annotated[int, "unit:m"]
+c: Annotated[int, "unit:s"]
 d: int
 e: int
 f = a if a > b else b  # fine - a and b have same unit
@@ -777,9 +775,9 @@ def test_comparison_expr(tmp_path: Path):
     checker = run_checker(
         """
 from typing import Annotated
-a: Annotated[int, "m"]
-b: Annotated[int, "m"]
-c: Annotated[int, "s"]
+a: Annotated[int, "unit:m"]
+b: Annotated[int, "unit:m"]
+c: Annotated[int, "unit:s"]
 d: int
 e: int
 a == b # (units match, no error)
@@ -825,7 +823,7 @@ def test_class_init_attribute(tmp_path: Path):
 from typing import Annotated
 class A:
     def __init__(self):
-        self.a: Annotated[int, "m"] = 1
+        self.a: Annotated[int, "unit:m"] = 1
 a = A()
 b = a.a
 c = A().a
@@ -844,9 +842,9 @@ def test_class_self_lookup(tmp_path: Path):
 from typing import Annotated
 class A:
     def __init__(self):
-        self.a: Annotated[int, "m"] = 1
-        self.b: Annotated[int, "m"] = 2
-        self.c: Annotated[int, "s"] = 3
+        self.a: Annotated[int, "unit:m"] = 1
+        self.b: Annotated[int, "unit:m"] = 2
+        self.c: Annotated[int, "unit:s"] = 3
         self.d = self.a + self.b
         self.b + self.c
 """,
@@ -864,8 +862,8 @@ def test_call_instance(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    def __call__(self) -> Annotated[int, "m"]:
-        a: Annotated[int, "m"]
+    def __call__(self) -> Annotated[int, "unit:m"]:
+        a: Annotated[int, "unit:m"]
         return a
 a = A()
 b = a()
@@ -883,9 +881,9 @@ def test_call_instance_error(tmp_path: Path):
         """
 from typing import Annotated
 class A:
-    def __call__(self, a: Annotated[int, "m"]) -> Annotated[int, "m"]:
+    def __call__(self, a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
         return a
-arg: Annotated[int, "s"] = 1
+arg: Annotated[int, "unit:s"] = 1
 a = A()
 b = a(arg)
 c = A()(arg)
@@ -896,3 +894,30 @@ c = A()(arg)
     error_msg = "Argument 1 to function 'A.__call__' has unit s, expected m"
     assert_error(checker.errors[0], "U003", 8, error_msg)
     assert_error(checker.errors[1], "U003", 9, error_msg)
+
+
+# def test_unit_test(tmp_path: Path):
+#     checker = run_checker(
+#         """
+# from unit_static_analyser.units import Unit
+# m = Unit("m")
+# from typing import Annotated
+# a: Annotated[int, m]
+# b: Annotated[int, Unit("s")]
+# """,
+#         tmp_path,
+#     )
+#     check_unit(checker, "a", m_unit)
+
+
+# def test_quantity(tmp_path: Path):
+#     checker = run_checker(
+#         """
+# from unit_static_analyser import Seconds, Metres
+# M = Metres
+# a: Seconds[int] = 1
+# b: M[int] = 1
+# """,
+#         h,
+#     )
+#     check_unit(checker, "a", m_unit)
