@@ -359,7 +359,7 @@ class UnitChecker:
         """Resolve a NameExpr to a Unit, TypeInfo, or FuncUnitDescription."""
         # Variable or symbol lookup
         if isinstance(expr.node, FuncDef):
-            return self.function_units[expr.node]
+            return self.function_units.get(expr.node)
         elif isinstance(expr.node, TypeInfo):
             return expr.node
         elif isinstance(expr.node, Var):
@@ -376,14 +376,18 @@ class UnitChecker:
         """Resolve a UnaryExpr to its operand's unit (unary ops do not change units)."""
         return self._infer_unit_from_expr(expr.expr)
 
-    def _process_op_expr(
-        self, expr: OpExpr
-    ) -> Unit | TypeInfo | FuncUnitDescription | None:
+    def _process_op_expr(self, expr: OpExpr) -> Unit | None:
         """Resolve an OpExpr (binary operator) to a unit, handling +, -, *, /."""
         left_unit = self._infer_unit_from_expr(expr.left)
         right_unit = self._infer_unit_from_expr(expr.right)
         op = expr.op
-        if not isinstance(left_unit, Unit) or not isinstance(right_unit, Unit):
+        has_left_unit = isinstance(left_unit, Unit)
+        has_right_unit = isinstance(right_unit, Unit)
+
+        if not has_left_unit and not has_right_unit:
+            return None
+
+        if has_left_unit != has_right_unit:  # effective xor
             self.errors.append(
                 UnitCheckerError(
                     code="U002",
@@ -392,6 +396,12 @@ class UnitChecker:
                 )
             )
             return None
+
+        if not isinstance(left_unit, Unit):
+            return None
+        if not isinstance(right_unit, Unit):
+            return None
+
         if op in {"+", "-"}:
             if left_unit == right_unit:
                 return left_unit

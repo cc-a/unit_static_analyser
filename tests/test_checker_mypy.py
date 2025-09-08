@@ -896,6 +896,34 @@ c = A()(arg)
     assert_error(checker.errors[1], "U003", 9, error_msg)
 
 
+def test_bin_op_no_units(tmp_path: Path):
+    """Checker that binary operations without units work."""
+    checker = run_checker(
+        """
+a = 1
+b = 2
+a + b""",
+        tmp_path,
+    )
+    assert not checker.errors
+
+
+def test_bin_op_function(tmp_path: Path):
+    """Test binary operations for unusual types."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+def f() -> Annotated[int, "unit:m"]:
+    b: Annotated[int, "unit:m"]
+    return b
+a + f
+""",
+        tmp_path,
+    )
+    assert_error(checker.errors[0], "U002", 7, "Operands must both have units")
+
+
 # def test_unit_test(tmp_path: Path):
 #     checker = run_checker(
 #         """
