@@ -6,9 +6,9 @@ authors = [{name = "Christopher Cave-Ayland", email = "c.cave-ayland@imperial.ac
 
 [tool.poetry.dependencies]
 python = "^3.13"
+mypy = "^1.16.1"
 
 [tool.poetry.group.dev.dependencies]
-mypy = "^1.16.1"
 pytest = "^8.4.1"
 pytest-cov = "^6.2.1"
 pytest-mock = "^3.14.1"
@@ -54,3 +54,6 @@ pydocstyle.convention = "google"
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[project.scripts]
+unit-static-analyser = "unit_static_analyser:run"
