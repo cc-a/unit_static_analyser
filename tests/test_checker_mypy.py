@@ -1006,6 +1006,52 @@ class A:
     check_unit(checker, "A.a", m_unit)
 
 
+def test_power(tmp_path: Path):
+    """Test raising to a power."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[float, "unit:m"] = 3
+b = a**2
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "a", m_unit)
+    check_unit(checker, "b", m_unit**2)
+
+
+def test_power_float_error(tmp_path: Path):
+    """Test error if non integer value used as exponent."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[float, "unit:m"] = 3
+b = a**2.0
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0], "U009", 4, "Exponent must be an explicit integer value."
+    )
+
+
+def test_power_non_int(tmp_path: Path):
+    """Test error if non integer value used as exponent."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[float, "unit:m"] = 3
+b = 3
+c = a**b
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0], "U009", 5, "Exponent must be an explicit integer value."
+    )
+
+
 # def test_unit_test(tmp_path: Path):
 #     checker = run_checker(
 #         """

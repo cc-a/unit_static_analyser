@@ -18,6 +18,7 @@ from mypy.nodes import (
     ExpressionStmt,
     FuncDef,
     IndexExpr,
+    IntExpr,
     MemberExpr,
     MypyFile,
     NameExpr,
@@ -32,6 +33,8 @@ from mypy.options import Options
 from mypy.types import CallableType, Instance, RawExpressionType, UnboundType
 
 from unit_static_analyser.units import Unit
+
+analysis_result = Unit | TypeInfo | FuncDef | Instance | None
 
 
 class UnitCheckerError:
@@ -153,7 +156,7 @@ class UnitChecker:
         files_and_modules = self._find_py_files_and_modules(paths)
         requested_modules = [module_name for _, module_name in files_and_modules]
         top_level_modules = self._get_top_level_modules(requested_modules)
-        build_result = self._mypy_build(files_and_modules, top_level_modules)
+        build_result = self._mypy_build(files_and_modules)
         module_order = self.topological_sort_modules(
             build_result.graph, requested_modules
         )
@@ -166,9 +169,7 @@ class UnitChecker:
             self._visit_mypy_file(build_result.files[module_name], module_name)
 
     @staticmethod
-    def _mypy_build(
-        files_and_modules: list[tuple[Path, str]], top_level_modules: set[str]
-    ) -> BuildResult:
+    def _mypy_build(files_and_modules: list[tuple[Path, str]]) -> BuildResult:
         options = Options()
         options.incremental = False
         options.show_traceback = True
@@ -297,9 +298,7 @@ class UnitChecker:
         """Process an expression statement."""
         self._analyse_expression(stmt.expr)
 
-    def _process_name_expr(
-        self, expr: NameExpr
-    ) -> Unit | TypeInfo | FuncDef | Instance | None:
+    def _process_name_expr(self, expr: NameExpr) -> analysis_result:
         """Resolve a NameExpr to a Unit, TypeInfo, or FuncUnitDescription."""
         # Variable or symbol lookup
         if isinstance(expr.node, FuncDef | TypeInfo):
@@ -312,11 +311,27 @@ class UnitChecker:
             return None
         return None
 
-    def _process_unary_expr(
-        self, expr: UnaryExpr
-    ) -> Unit | TypeInfo | FuncDef | Instance | None:
+    def _process_unary_expr(self, expr: UnaryExpr) -> analysis_result:
         """Resolve a UnaryExpr to its operand's unit (unary ops do not change units)."""
         return self._analyse_expression(expr.expr)
+
+    def _process_power_op(
+        self, expr: OpExpr, left_unit: analysis_result
+    ) -> Unit | None:
+        """Resolve a OpExpr raising value to a power."""
+        if not isinstance(left_unit, Unit):
+            return None
+        if not isinstance(expr.right, IntExpr):
+            self.errors.append(
+                UnitCheckerError(
+                    code="U009",
+                    lineno=expr.line,
+                    message="Exponent must be an explicit integer value.",
+                )
+            )
+            return None
+        exponent = expr.right.value
+        return left_unit**exponent
 
     def _process_op_expr(self, expr: OpExpr) -> Unit | None:
         """Resolve an OpExpr (binary operator) to a unit, handling +, -, *, /."""
@@ -328,6 +343,9 @@ class UnitChecker:
 
         if not has_left_unit and not has_right_unit:
             return None
+
+        if op == "**":
+            return self._process_power_op(expr, left_unit)
 
         if has_left_unit != has_right_unit:  # effective xor
             self.errors.append(
@@ -370,9 +388,7 @@ class UnitChecker:
             return analysed
         return None
 
-    def _analyse_expression(
-        self, expr: Expression
-    ) -> Unit | TypeInfo | FuncDef | Instance | None:
+    def _analyse_expression(self, expr: Expression) -> analysis_result:
         """Recursively infer the unit for a given expression node.
 
         Args:
@@ -427,9 +443,7 @@ class UnitChecker:
                     )
                 )
 
-    def _process_call_expr(
-        self, expr: CallExpr
-    ) -> Unit | TypeInfo | FuncDef | Instance | None:
+    def _process_call_expr(self, expr: CallExpr) -> analysis_result:
         """Resolve a CallExpr (function or constructor call) to a unit or type."""
         callee = self._analyse_expression(expr.callee)
 
@@ -571,9 +585,7 @@ class UnitChecker:
         # If neither branch has a unit, return None (unitless)
         return None
 
-    def _process_index_expr(
-        self, expr: IndexExpr
-    ) -> Unit | TypeInfo | Instance | FuncDef | None:
+    def _process_index_expr(self, expr: IndexExpr) -> analysis_result:
         base_unit = self._analyse_expression(expr.base)
         if isinstance(base_unit, Unit):
             return base_unit
