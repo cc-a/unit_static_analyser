@@ -72,3 +72,9 @@ def test_unit_repr_and_str():
     r = repr(u)
     assert "kg" in s and "m^2" in s and "s^-2" in s
     assert r.startswith("Unit(")
+
+
+def test_dimensionless():
+    """Test parsing an empty string results in a dimensionless unit."""
+    u = Unit.from_string("")
+    assert u.unit_map == {}

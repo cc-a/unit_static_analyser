@@ -89,7 +89,11 @@ class Unit:
             unit_str: Representation of the unit, e.g. 'kg.m^2.s^-2'.
         """
         unit_map: dict[str, int] = {}
-        for part in unit_str.split("."):
+        parts = unit_str.split(".")
+        if parts == [""]:
+            # dimensionless
+            return cls({})
+        for part in parts:
             match = re.fullmatch(r"([a-zA-Z]+)(?:\^(-?\d+))?", part)
             if not match:
                 raise ValueError(f"Invalid unit part: {part}")
