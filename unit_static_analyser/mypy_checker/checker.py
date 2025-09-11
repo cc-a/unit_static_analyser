@@ -4,10 +4,8 @@ This module provides a static analysis tool for extracting and checking physical
 from Python code using type annotations and mypy's typed AST.
 """
 
-from dataclasses import dataclass
 from graphlib import TopologicalSorter
 from pathlib import Path
-from typing import Self
 
 from mypy.build import BuildResult, BuildSource, State, build
 from mypy.nodes import (
@@ -19,6 +17,7 @@ from mypy.nodes import (
     Expression,
     ExpressionStmt,
     FuncDef,
+    IndexExpr,
     MemberExpr,
     MypyFile,
     NameExpr,
@@ -49,99 +48,6 @@ class UnitCheckerError:
         return (
             "UnitCheckerError"
             f"(code={self.code!r}, lineno={self.lineno!r}, message={self.message!r})"
-        )
-
-
-@dataclass
-class FuncArgDescription:
-    """Description of the units associated with a function argument."""
-
-    position: int
-    name: str
-    unit: Unit | None
-    kwarg: bool = False
-
-
-@dataclass
-class FuncUnitDescription:
-    """Description of the units associated with a function."""
-
-    returns: Unit | TypeInfo | None
-    args: dict[str, FuncArgDescription]
-    name: str
-    fullname: str
-
-    def get_arg_by_position(self, position: int) -> FuncArgDescription | None:
-        """Get the argument of a function by its position."""
-        for arg in self.args.values():
-            if arg.position == position:
-                return arg
-        return None
-
-    @classmethod
-    def from_func_def(cls, func_def: FuncDef) -> Self | None:
-        """Extract unit information from a function definition."""
-        unanalyzed_type = func_def.unanalyzed_type
-        if not isinstance(unanalyzed_type, CallableType):
-            return None
-
-        ret_unit: Unit | TypeInfo | None = None
-        if isinstance(unanalyzed_type.ret_type, UnboundType):
-            if (ret_type := unanalyzed_type.ret_type).name == "Annotated":
-                if (
-                    not isinstance(ret_type.args[1], RawExpressionType)
-                    or not isinstance(ret_type.args[1].literal_value, str)
-                    or not ret_type.args[1].literal_value.startswith("unit:")
-                ):
-                    return None
-                try:
-                    ret_unit = Unit.from_string(
-                        ret_type.args[1].literal_value.removeprefix("unit:")
-                    )
-                except IndexError:
-                    return None
-            else:
-                if not isinstance(func_def.type, CallableType) or not isinstance(
-                    func_def.type.ret_type, Instance
-                ):
-                    return None
-                ret_unit = func_def.type.ret_type.type
-
-        arg_units: dict[str, FuncArgDescription] = dict()
-        offset = 0
-        for arg_name, arg_type in zip(
-            unanalyzed_type.arg_names, unanalyzed_type.arg_types
-        ):
-            if arg_name is None:
-                raise NotImplementedError("Unsupported form of function arguments.")
-            if arg_name == "self":
-                offset = 1
-                continue
-            if getattr(arg_type, "name", None) == "Annotated":
-                if (
-                    not isinstance(arg_type, UnboundType)
-                    or not isinstance(arg_type.args[1], RawExpressionType)
-                    or not isinstance(arg_type.args[1].literal_value, str)
-                    or not arg_type.args[1].literal_value.startswith("unit:")
-                ):
-                    continue
-                try:
-                    # create FuncArgDescription
-                    arg_units[arg_name] = FuncArgDescription(
-                        position=unanalyzed_type.arg_names.index(arg_name) - offset,
-                        name=arg_name,
-                        unit=Unit.from_string(
-                            arg_type.args[1].literal_value.removeprefix("unit:")
-                        ),
-                    )
-                except ValueError:
-                    pass
-
-        return cls(
-            returns=ret_unit,
-            args=arg_units,
-            name=func_def.name,
-            fullname=".".join(func_def.fullname.split(".")[1:]),
         )
 
 
@@ -207,7 +113,36 @@ class UnitChecker:
         """
         self.errors: list[UnitCheckerError] = []
         self.var_units: dict[Var, Unit] = {}
-        self.function_units: dict[FuncDef, FuncUnitDescription] = {}
+        self.function_units: dict[FuncDef, Unit | TypeInfo] = {}
+
+    def _get_function_return_type(self, func_def: FuncDef) -> Unit | TypeInfo | None:
+        unanalyzed_type = func_def.unanalyzed_type
+        if not isinstance(unanalyzed_type, CallableType):
+            return None
+        ret_unit: Unit | TypeInfo | None = None
+        if isinstance(unanalyzed_type.ret_type, UnboundType):
+            if (ret_type := unanalyzed_type.ret_type).name == "Annotated":
+                # return type has a unit annotation
+                if (
+                    not isinstance(ret_type.args[1], RawExpressionType)
+                    or not isinstance(ret_type.args[1].literal_value, str)
+                    or not ret_type.args[1].literal_value.startswith("unit:")
+                ):
+                    return None
+                try:
+                    ret_unit = Unit.from_string(
+                        ret_type.args[1].literal_value.removeprefix("unit:")
+                    )
+                except IndexError:
+                    return None
+            else:
+                # no unit annotation but we may still need to capture the return type
+                if not isinstance(func_def.type, CallableType) or not isinstance(
+                    func_def.type.ret_type, Instance
+                ):
+                    return None
+                ret_unit = func_def.type.ret_type.type
+        return ret_unit
 
     def check(self, paths: list[Path]) -> None:
         """Run check units annotations on the given file(s) or directory(ies).
@@ -304,34 +239,43 @@ class UnitChecker:
             unit = self._extract_unit_from_type(stmt)
             if unit is not None:
                 self.var_units[key] = unit
-            # If assignment has a value, try to infer unit from the value
-            # (e.g., c = a + b)
-            inferred_unit = self._infer_unit_from_expr(stmt.rvalue)
+
+            inferred_unit = self._analyse_expression(stmt.rvalue)
             if isinstance(inferred_unit, Unit):
                 self.var_units[key] = inferred_unit
-            if isinstance(inferred_unit, FuncUnitDescription):
-                if isinstance(inferred_unit.returns, Unit):
-                    self.var_units[key] = inferred_unit.returns
 
     def _process_funcdef_stmt(self, stmt: FuncDef) -> None:
         """Process a function definition statement and extract/check units."""
-        # Visit function body and check return units
+        # store function arguments first so these are available when processing
+        # the function body
+        for argument in stmt.arguments:
+            if (
+                isinstance(argument.type_annotation, UnboundType)
+                and argument.type_annotation.name == "Annotated"
+            ):
+                arg = argument.type_annotation.args[1]
+                if not isinstance(arg, RawExpressionType) or not isinstance(
+                    arg.literal_value, str
+                ):
+                    continue
+                if arg.literal_value.startswith("unit:"):
+                    self.var_units[argument.variable] = Unit.from_string(
+                        arg.literal_value.removeprefix("unit:")
+                    )
+
         for substmt in stmt.body.body:
             self._visit_stmt(substmt)
 
-        unit_desc = FuncUnitDescription.from_func_def(stmt)
-        if not unit_desc:
+        return_type = self._get_function_return_type(stmt)
+        if not return_type:
             return
-        self.function_units[stmt] = unit_desc
+        self.function_units[stmt] = return_type
 
         # Check all ReturnStmt nodes for unit correctness
         for substmt in stmt.body.body:
             if isinstance(substmt, ReturnStmt) and substmt.expr is not None:
-                returned_unit = self._infer_unit_from_expr(substmt.expr)
-                if (
-                    isinstance(returned_unit, Unit)
-                    and returned_unit != unit_desc.returns
-                ):
+                returned_unit = self._infer_unit_from_expression(substmt.expr)
+                if isinstance(return_type, Unit) and returned_unit != return_type:
                     self.errors.append(
                         UnitCheckerError(
                             code="U004",
@@ -339,7 +283,7 @@ class UnitChecker:
                             message=(
                                 "Unit of return value does not match function "
                                 f"signature: returned {returned_unit}, "
-                                f"expected {unit_desc.returns}"
+                                f"expected {return_type}"
                             ),
                         )
                     )
@@ -351,16 +295,14 @@ class UnitChecker:
 
     def _process_expression_stmt(self, stmt: ExpressionStmt) -> None:
         """Process an expression statement."""
-        self._infer_unit_from_expr(stmt.expr)
+        self._analyse_expression(stmt.expr)
 
     def _process_name_expr(
         self, expr: NameExpr
-    ) -> Unit | TypeInfo | FuncUnitDescription | Instance | None:
+    ) -> Unit | TypeInfo | FuncDef | Instance | None:
         """Resolve a NameExpr to a Unit, TypeInfo, or FuncUnitDescription."""
         # Variable or symbol lookup
-        if isinstance(expr.node, FuncDef):
-            return self.function_units.get(expr.node)
-        elif isinstance(expr.node, TypeInfo):
+        if isinstance(expr.node, FuncDef | TypeInfo):
             return expr.node
         elif isinstance(expr.node, Var):
             if unit := self.var_units.get(expr.node):
@@ -372,14 +314,14 @@ class UnitChecker:
 
     def _process_unary_expr(
         self, expr: UnaryExpr
-    ) -> Unit | TypeInfo | FuncUnitDescription | Instance | None:
+    ) -> Unit | TypeInfo | FuncDef | Instance | None:
         """Resolve a UnaryExpr to its operand's unit (unary ops do not change units)."""
-        return self._infer_unit_from_expr(expr.expr)
+        return self._analyse_expression(expr.expr)
 
     def _process_op_expr(self, expr: OpExpr) -> Unit | None:
         """Resolve an OpExpr (binary operator) to a unit, handling +, -, *, /."""
-        left_unit = self._infer_unit_from_expr(expr.left)
-        right_unit = self._infer_unit_from_expr(expr.right)
+        left_unit = self._analyse_expression(expr.left)
+        right_unit = self._analyse_expression(expr.right)
         op = expr.op
         has_left_unit = isinstance(left_unit, Unit)
         has_right_unit = isinstance(right_unit, Unit)
@@ -422,9 +364,15 @@ class UnitChecker:
             return left_unit * (right_unit**-1)
         return None
 
-    def _infer_unit_from_expr(
+    def _infer_unit_from_expression(self, expr: Expression) -> Unit | None:
+        analysed = self._analyse_expression(expr)
+        if isinstance(analysed, Unit):
+            return analysed
+        return None
+
+    def _analyse_expression(
         self, expr: Expression
-    ) -> Unit | TypeInfo | FuncUnitDescription | Instance | None:
+    ) -> Unit | TypeInfo | FuncDef | Instance | None:
         """Recursively infer the unit for a given expression node.
 
         Args:
@@ -449,46 +397,52 @@ class UnitChecker:
                 return None
             case ConditionalExpr():
                 return self._process_conditional_expr(expr)
+            case IndexExpr():
+                return self._process_index_expr(expr)
             case _:
                 return None
 
+    def _check_arguments_of_function_call(
+        self, func_def: FuncDef, args: list[Expression], line: int
+    ) -> None:
+        if func_def.info:
+            func_arguments = func_def.arguments[1:]
+        else:
+            func_arguments = func_def.arguments
+
+        for i, (arg, arg_def) in enumerate(zip(args, func_arguments)):
+            expected_unit = self.var_units.get(arg_def.variable)
+            if not expected_unit:
+                continue
+            inferred_unit = self._analyse_expression(arg)
+            if inferred_unit != expected_unit:
+                self.errors.append(
+                    UnitCheckerError(
+                        code="U003",
+                        lineno=line,
+                        message=(
+                            f"Argument {i + 1} to function '{func_def.fullname}' "
+                            f"has unit {inferred_unit}, expected {expected_unit}"
+                        ),
+                    )
+                )
+
     def _process_call_expr(
         self, expr: CallExpr
-    ) -> Unit | TypeInfo | FuncUnitDescription | Instance | None:
+    ) -> Unit | TypeInfo | FuncDef | Instance | None:
         """Resolve a CallExpr (function or constructor call) to a unit or type."""
-        callee = self._infer_unit_from_expr(expr.callee)
-        # Argument unit checking for functions
-        if isinstance(callee, FuncUnitDescription) or isinstance(callee, Instance):
-            if isinstance(callee, FuncUnitDescription):
-                func_desc = callee
+        callee = self._analyse_expression(expr.callee)
+
+        if isinstance(callee, FuncDef | Instance):
+            if isinstance(callee, Instance):
+                sym_node = callee.type.names.get("__call__")
+                if not sym_node or not isinstance(sym_node.node, FuncDef):
+                    return None
+                func_def = sym_node.node
             else:
-                if not (sym_node := callee.type.names.get("__call__")):
-                    return None
-                if not isinstance(sym_node.node, FuncDef):
-                    return None
-                func_desc = self.function_units[sym_node.node]
-            for i, arg in enumerate(expr.args):
-                arg_unit = self._infer_unit_from_expr(arg)
-                arg_description = func_desc.get_arg_by_position(i)
-                if not arg_description:
-                    continue
-                expected_unit = arg_description.unit
-                if (
-                    expected_unit is not None
-                    and arg_unit is not None
-                    and arg_unit != expected_unit
-                ):
-                    self.errors.append(
-                        UnitCheckerError(
-                            code="U003",
-                            lineno=getattr(expr, "line", 0),
-                            message=(
-                                f"Argument {i + 1} to function '{func_desc.fullname}' "
-                                f"has unit {arg_unit}, expected {expected_unit}"
-                            ),
-                        )
-                    )
-            return func_desc
+                func_def = callee
+            self._check_arguments_of_function_call(func_def, expr.args, expr.line)
+            return self.function_units.get(func_def)
         elif isinstance(callee, TypeInfo):
             # calling a class returns an instance
             return Instance(callee, [])
@@ -496,40 +450,27 @@ class UnitChecker:
 
     def _process_member_expr(
         self, expr: MemberExpr
-    ) -> Unit | TypeInfo | FuncUnitDescription | None:
+    ) -> Unit | TypeInfo | FuncDef | None:
         """Resolve a MemberExpr (attribute access), including chained attributes."""
         if isinstance(expr.node, TypeInfo):
             return expr.node
         if isinstance(expr.node, Var) and expr.node in self.var_units:
             return self.var_units[expr.node]
 
-        base = self._infer_unit_from_expr(expr.expr)
+        base = self._analyse_expression(expr.expr)
 
-        if isinstance(base, FuncUnitDescription):
-            if not base.returns:
-                return None
-            elif isinstance(base.returns, Unit):
-                return base.returns
-            else:
-                type_ = base.returns
-        elif isinstance(base, TypeInfo):
-            type_ = base
-        elif isinstance(base, Instance):
-            type_ = base.type
-        else:
-            return None
-        if not (node := type_.names[expr.name].node):
-            return None
-        if isinstance(node, Var):
-            if isinstance(node.type, CallableType) and isinstance(
-                node.type.ret_type, Instance
-            ):
-                # accessing a class that is an attribute of another class
-                # lord knows why it's a CallableType
-                return node.type.ret_type.type
-            return self.var_units.get(node)
-        elif isinstance(node, FuncDef):
-            return self.function_units.get(node)
+        if isinstance(base, TypeInfo | Instance):
+            type_ = base if isinstance(base, TypeInfo) else base.type
+            if sym_node := type_.names.get(expr.name):
+                node = sym_node.node
+                if isinstance(node, Var):
+                    if isinstance(node.type, CallableType):
+                        # accessing a class that is an attribute of another class
+                        # lord knows why it's a CallableType
+                        return node.type.type_object()
+                    return self.var_units.get(node)
+                elif isinstance(node, FuncDef):
+                    return node
         return None
 
     ANNOTATED_TYPE_NAMES = ("typing.Annotated", "typing_extensions.Annotated")
@@ -564,8 +505,8 @@ class UnitChecker:
         """
         operands = expr.operands
         for i in range(len(operands) - 1):
-            left_unit = self._infer_unit_from_expr(operands[i])
-            right_unit = self._infer_unit_from_expr(operands[i + 1])
+            left_unit = self._analyse_expression(operands[i])
+            right_unit = self._analyse_expression(operands[i + 1])
             if not isinstance(left_unit, Unit) and not isinstance(right_unit, Unit):
                 return None
             # Disallow if only one side has units
@@ -600,8 +541,8 @@ class UnitChecker:
 
         Returns the unit if both branches match, otherwise emits U007 and returns None.
         """
-        true_unit = self._infer_unit_from_expr(expr.if_expr)
-        false_unit = self._infer_unit_from_expr(expr.else_expr)
+        true_unit = self._analyse_expression(expr.if_expr)
+        false_unit = self._analyse_expression(expr.else_expr)
         if isinstance(true_unit, Unit) and isinstance(false_unit, Unit):
             if true_unit == false_unit:
                 return true_unit
@@ -628,4 +569,25 @@ class UnitChecker:
             )
             return None
         # If neither branch has a unit, return None (unitless)
+        return None
+
+    def _process_index_expr(
+        self, expr: IndexExpr
+    ) -> Unit | TypeInfo | Instance | FuncDef | None:
+        base_unit = self._analyse_expression(expr.base)
+        if isinstance(base_unit, Unit):
+            return base_unit
+        # callable type maps to __getitem__ method
+        if isinstance(expr.method_type, CallableType):
+            item_type = expr.method_type.ret_type
+            if isinstance(item_type, CallableType):
+                # don't love this think it needs a rework
+                if isinstance(item_type.definition, FuncDef) and (
+                    ret_type := self.function_units.get(item_type.definition)
+                ):
+                    return ret_type
+                elif isinstance(item_type.ret_type, Instance):
+                    return item_type.ret_type.type
+            elif isinstance(expr.method_type.ret_type, Instance):
+                return expr.method_type.ret_type
         return None

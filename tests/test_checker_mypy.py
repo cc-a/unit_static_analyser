@@ -152,7 +152,9 @@ b = f2(f().a)
         tmp_path,
     )
     check_unit(checker, "b", s_unit)
-    assert_error(checker.errors[0], "U003", 9, "Argument 1 to function 'f2'")
+    assert_error(
+        checker.errors[0], "U003", 9, "Argument 1 to function 'test_module.f2'"
+    )
     assert "has unit m, expected s" in checker.errors[0].message
 
 
@@ -164,7 +166,7 @@ from typing import Annotated
 class A:
     a: Annotated[int, "unit:m"]
     def f(self, b: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
-        return a
+        return self.a
 def f() -> A:
     return A()
 b: Annotated[int, "unit:s"] = 1
@@ -173,7 +175,9 @@ d = f().a
 """,
         tmp_path,
     )
-    assert_error(checker.errors[0], "U003", 10, "Argument 1 to function 'A.f'")
+    assert_error(
+        checker.errors[0], "U003", 10, "Argument 1 to function 'test_module.A.f'"
+    )
     assert "has unit s, expected m" in checker.errors[0].message
     check_unit(checker, "c", m_unit)
     check_unit(checker, "d", m_unit)
@@ -366,7 +370,9 @@ a = f2(f1())
 """,
         tmp_path,
     )
-    assert_error(checker.errors[0], "U003", 8, "Argument 1 to function 'f2'")
+    assert_error(
+        checker.errors[0], "U003", 8, "Argument 1 to function 'test_module.f2'"
+    )
     check_unit(checker, "a", m_unit)
 
 
@@ -383,7 +389,7 @@ a = f(A.a)
 """,
         tmp_path,
     )
-    assert_error(checker.errors[0], "U003", 7, "Argument 1 to function 'f'")
+    assert_error(checker.errors[0], "U003", 7, "Argument 1 to function 'test_module.f'")
 
 
 def test_expression_function_call_instance_attribute_mismatch(tmp_path: Path):
@@ -399,7 +405,7 @@ a = f(A().a)
 """,
         tmp_path,
     )
-    assert_error(checker.errors[0], "U003", 7, "Argument 1 to function 'f'")
+    assert_error(checker.errors[0], "U003", 7, "Argument 1 to function 'test_module.f'")
 
 
 def test_expression_function_args(tmp_path: Path):
@@ -417,8 +423,7 @@ b = f(a)
     check_unit(checker, "b", m_unit)
     ((func_def, func_units),) = checker.function_units.items()
     assert func_def.name == "f"
-    assert isinstance(func_units.returns, Unit)
-    assert func_units.returns == m_unit
+    assert func_units == m_unit
 
 
 def test_expression_method_args(tmp_path: Path):
@@ -450,7 +455,7 @@ b = f(a)
         tmp_path,
     )
     assert checker.errors, "Expected an error for unit mismatch in function argument"
-    assert_error(checker.errors[0], "U003", 6, "Argument 1 to function 'f'")
+    assert_error(checker.errors[0], "U003", 6, "Argument 1 to function 'test_module.f'")
     assert "has unit s, expected m" in checker.errors[0].message
 
 
@@ -467,7 +472,9 @@ b = A().f(a)
 """,
         tmp_path,
     )
-    assert_error(checker.errors[0], "U003", 7, "Argument 1 to function 'A.f'")
+    assert_error(
+        checker.errors[0], "U003", 7, "Argument 1 to function 'test_module.A.f'"
+    )
     assert "has unit s, expected m" in checker.errors[0].message
 
 
@@ -495,9 +502,8 @@ def f() -> int:
 
     ((func_def, func_units),) = checker.function_units.items()
     assert func_def.name == "f"
-    assert func_units.returns
-    assert isinstance(func_units.returns, TypeInfo)
-    assert func_units.returns.fullname == "builtins.int"
+    assert isinstance(func_units, TypeInfo)
+    assert func_units.fullname == "builtins.int"
 
 
 def test_function_return_type_wrong_unit(tmp_path: Path):
@@ -699,7 +705,7 @@ def test_closure_function_lookup(tmp_path: Path):
 from typing import Annotated
 def f():
     def f2() -> Annotated[int, "unit:m"]:
-        a: Annotated[int, "m"]
+        a: Annotated[int, "unit:m"]
         return a
     def f3() -> Annotated[int, "unit:m"]:
         b = f2()
@@ -891,7 +897,7 @@ c = A()(arg)
         tmp_path,
     )
     assert checker.errors
-    error_msg = "Argument 1 to function 'A.__call__' has unit s, expected m"
+    error_msg = "Argument 1 to function 'test_module.A.__call__' has unit s, expected m"
     assert_error(checker.errors[0], "U003", 8, error_msg)
     assert_error(checker.errors[1], "U003", 9, error_msg)
 
@@ -922,6 +928,82 @@ a + f
         tmp_path,
     )
     assert_error(checker.errors[0], "U002", 7, "Operands must both have units")
+
+
+def test_getitem(tmp_path: Path):
+    """Test units applied to containers and access of elements."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[list, "unit:m"] = [0, 1]
+b = a[0] + a[1]
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "a", m_unit)
+    check_unit(checker, "b", m_unit)
+
+
+def test_getitem_class(tmp_path: Path):
+    """Test index expr that returns a class."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"] = 3
+b = [A][0].a
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "b", m_unit)
+
+
+def test_getitem_instance(tmp_path: Path):
+    """Test index expr that returns an instance."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"] = 3
+b = [A()][0].a
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "b", m_unit)
+
+
+def test_getitem_function(tmp_path: Path):
+    """Test index expr that returns a function."""
+    checker = run_checker(
+        """
+from typing import Annotated
+def f() -> Annotated[int, "unit:m"]:
+    a: Annotated[int, "unit:m"] = 3
+    return a
+b = [f][0]()
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "b", m_unit)
+
+
+def test_function_init_set_self(tmp_path: Path):
+    """Test setting units from init functions."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    def __init__(self, a: Annotated[int, "unit:m"]):
+        self.a = a
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "A.a", m_unit)
 
 
 # def test_unit_test(tmp_path: Path):
