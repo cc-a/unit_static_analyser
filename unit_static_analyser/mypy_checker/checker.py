@@ -25,6 +25,9 @@ from mypy.nodes import (
     OpExpr,
     ReturnStmt,
     Statement,
+    StrExpr,
+    TupleExpr,
+    TypeAlias,
     TypeInfo,
     UnaryExpr,
     Var,
@@ -117,6 +120,7 @@ class UnitChecker:
         self.errors: list[UnitCheckerError] = []
         self.var_units: dict[Var, Unit] = {}
         self.function_units: dict[FuncDef, Unit | TypeInfo] = {}
+        self.aliases: dict[TypeAlias, Unit] = {}
 
     def _get_function_return_type(self, func_def: FuncDef) -> Unit | TypeInfo | None:
         unanalyzed_type = func_def.unanalyzed_type
@@ -124,27 +128,14 @@ class UnitChecker:
             return None
         ret_unit: Unit | TypeInfo | None = None
         if isinstance(unanalyzed_type.ret_type, UnboundType):
-            if (ret_type := unanalyzed_type.ret_type).name == "Annotated":
-                # return type has a unit annotation
-                if (
-                    not isinstance(ret_type.args[1], RawExpressionType)
-                    or not isinstance(ret_type.args[1].literal_value, str)
-                    or not ret_type.args[1].literal_value.startswith("unit:")
-                ):
-                    return None
-                try:
-                    ret_unit = Unit.from_string(
-                        ret_type.args[1].literal_value.removeprefix("unit:")
-                    )
-                except IndexError:
-                    return None
-            else:
-                # no unit annotation but we may still need to capture the return type
-                if not isinstance(func_def.type, CallableType) or not isinstance(
-                    func_def.type.ret_type, Instance
-                ):
-                    return None
-                ret_unit = func_def.type.ret_type.type
+            if unit := self._extract_unit_from_type(unanalyzed_type.ret_type):
+                return unit
+            # no unit annotation but we may still need to capture the return type
+            if not isinstance(func_def.type, CallableType) or not isinstance(
+                func_def.type.ret_type, Instance
+            ):
+                return None
+            ret_unit = func_def.type.ret_type.type
         return ret_unit
 
     def check(self, paths: list[Path]) -> None:
@@ -231,38 +222,55 @@ class UnitChecker:
 
     def _process_assignment_stmt(self, stmt: AssignmentStmt) -> None:
         """Process an assignment statement and extract/check units."""
-        for lvalue in stmt.lvalues:
-            if not isinstance(lvalue, NameExpr | MemberExpr):
-                continue
-            key = lvalue.node
-            if not isinstance(key, Var):
-                continue
-            unit = self._extract_unit_from_type(stmt)
-            if unit is not None:
-                self.var_units[key] = unit
+        if stmt.is_alias_def:
+            lvalue = stmt.lvalues[0]
+            if not isinstance(lvalue, NameExpr):
+                return None
+            alias = self.module_symbol_table[lvalue.name].node
+            if not isinstance(alias, TypeAlias):
+                return None
+            if not isinstance(stmt.rvalue, IndexExpr) or not isinstance(
+                stmt.rvalue.base, NameExpr
+            ):
+                return None
+            if stmt.rvalue.base.fullname == "typing.Annotated" and isinstance(
+                stmt.rvalue.index, TupleExpr
+            ):
+                try:
+                    item = stmt.rvalue.index.items[1]
+                except IndexError:
+                    return None
+                if isinstance(item, StrExpr) and item.value.startswith("unit:"):
+                    self.aliases[alias] = Unit.from_string(
+                        item.value.removeprefix("unit:")
+                    )
+        else:
+            for lvalue in stmt.lvalues:
+                if not isinstance(lvalue, NameExpr | MemberExpr):
+                    continue
+                key = lvalue.node
+                if not isinstance(key, Var):
+                    continue
+                if stmt.unanalyzed_type and isinstance(
+                    stmt.unanalyzed_type, UnboundType
+                ):
+                    annotated_unit = self._extract_unit_from_type(stmt.unanalyzed_type)
+                    if annotated_unit is not None:
+                        self.var_units[key] = annotated_unit
 
-            inferred_unit = self._analyse_expression(stmt.rvalue)
-            if isinstance(inferred_unit, Unit):
-                self.var_units[key] = inferred_unit
+                inferred_unit = self._analyse_expression(stmt.rvalue)
+                if isinstance(inferred_unit, Unit):
+                    self.var_units[key] = inferred_unit
 
     def _process_funcdef_stmt(self, stmt: FuncDef) -> None:
         """Process a function definition statement and extract/check units."""
         # store function arguments first so these are available when processing
         # the function body
         for argument in stmt.arguments:
-            if (
-                isinstance(argument.type_annotation, UnboundType)
-                and argument.type_annotation.name == "Annotated"
-            ):
-                arg = argument.type_annotation.args[1]
-                if not isinstance(arg, RawExpressionType) or not isinstance(
-                    arg.literal_value, str
-                ):
-                    continue
-                if arg.literal_value.startswith("unit:"):
-                    self.var_units[argument.variable] = Unit.from_string(
-                        arg.literal_value.removeprefix("unit:")
-                    )
+            if isinstance(argument.type_annotation, UnboundType):
+                unit = self._extract_unit_from_type(argument.type_annotation)
+                if unit:
+                    self.var_units[argument.variable] = unit
 
         for substmt in stmt.body.body:
             self._visit_stmt(substmt)
@@ -489,19 +497,24 @@ class UnitChecker:
 
     ANNOTATED_TYPE_NAMES = ("typing.Annotated", "typing_extensions.Annotated")
 
-    def _extract_unit_from_type(self, stmt: AssignmentStmt) -> Unit | None:
+    def _extract_unit_from_type(self, type_: UnboundType) -> Unit | None:
         """Extract a Unit from an assignment's type annotation if present.
 
         Args:
-            stmt: The AssignmentStmt node to analyze.
+            type_: The type to analyse.
 
         Returns:
-            The extracted Unit if the type is Annotated, otherwise None.
+            The extracted Unit if available, otherwise None.
         """
-        type_ = stmt.unanalyzed_type
-        if not isinstance(type_, UnboundType):
+        if not (sym_node := self.module_symbol_table.get(type_.name)):
             return None
-        if type_.name == "Annotated":
+
+        if isinstance(sym_node.node, TypeAlias):
+            return self.aliases.get(sym_node.node)
+        elif (
+            isinstance(sym_node.node, Var)
+            and sym_node.node.fullname == "typing.Annotated"
+        ):
             arg = type_.args[1]
             if not isinstance(arg, RawExpressionType) or not isinstance(
                 arg.literal_value, str
@@ -524,7 +537,7 @@ class UnitChecker:
             if not isinstance(left_unit, Unit) and not isinstance(right_unit, Unit):
                 return None
             # Disallow if only one side has units
-            if isinstance(left_unit, Unit) ^ isinstance(right_unit, Unit):  # ^ is xor
+            if isinstance(left_unit, Unit) != isinstance(right_unit, Unit):
                 self.errors.append(
                     UnitCheckerError(
                         code="U006",
@@ -573,7 +586,7 @@ class UnitChecker:
                 )
                 return None
         # If only one branch has a unit, treat as error (unit mismatch)
-        if isinstance(true_unit, Unit) ^ isinstance(false_unit, Unit):  # ^ is xor
+        if isinstance(true_unit, Unit) != isinstance(false_unit, Unit):  # ^ is xor
             self.errors.append(
                 UnitCheckerError(
                     code="U008",

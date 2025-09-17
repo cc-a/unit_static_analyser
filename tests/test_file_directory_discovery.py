@@ -115,7 +115,7 @@ def test_package_dependency(tmp_path: Path, package_files: dict[str, Path]):
     files_and_modules = UnitChecker._find_py_files_and_modules([tmp_path / file1_path])
     requested_modules = [module_name for _, module_name in files_and_modules]
     top_level_modules = UnitChecker._get_top_level_modules(requested_modules)
-    build_result = UnitChecker._mypy_build(files_and_modules, top_level_modules)
+    build_result = UnitChecker._mypy_build(files_and_modules)
     module_order = UnitChecker.topological_sort_modules(
         build_result.graph, requested_modules
     )
@@ -148,7 +148,7 @@ def test_multi_file_analysis_import_from(
     file1 = package_files["pkg.sub1.file1"]
     (tmp_path / file1).write_text("""
 from typing import Annotated
-x: Annotated[int, "m"] = 1
+x: Annotated[int, "unit:m"] = 1
 """)
 
     file2 = package_files["pkg.sub2.file2"]
@@ -173,7 +173,7 @@ def test_multi_file_analysis_import_from_relative(
     file1 = package_files["pkg.sub1.file1"]
     (tmp_path / file1).write_text("""
 from typing import Annotated
-x: Annotated[int, "m"] = 1
+x: Annotated[int, "unit:m"] = 1
 """)
 
     file2 = package_files["pkg.sub2.file2"]
@@ -199,7 +199,7 @@ def test_multi_file_analysis_import_from_class(
     (tmp_path / file1).write_text("""
 from typing import Annotated
 class A:
-    a: Annotated[int, "m"] = 1
+    a: Annotated[int, "unit:m"] = 1
 """)
 
     file2 = package_files["pkg.sub2.file2"]
@@ -223,7 +223,7 @@ def test_multi_file_analysis_import_from_as(
     file1 = package_files["pkg.sub1.file1"]
     (tmp_path / file1).write_text("""
 from typing import Annotated
-x: Annotated[int, "m"] = 1
+x: Annotated[int, "unit:m"] = 1
 """)
 
     file2 = package_files["pkg.sub2.file2"]
@@ -246,7 +246,7 @@ def test_multi_file_analysis_import(tmp_path: Path, package_files: dict[str, Pat
     file1 = package_files["pkg.sub1.file1"]
     (tmp_path / file1).write_text("""
 from typing import Annotated
-x: Annotated[int, "m"] = 1
+x: Annotated[int, "unit:m"] = 1
 """)
 
     file2 = package_files["pkg.sub2.file2"]
@@ -270,7 +270,7 @@ def test_multi_file_analysis_import_as(tmp_path: Path, package_files: dict[str, 
     file1 = package_files["pkg.sub1.file1"]
     (tmp_path / file1).write_text("""
 from typing import Annotated
-x: Annotated[int, "m"] = 1
+x: Annotated[int, "unit:m"] = 1
 """)
 
     # Write second file
@@ -287,3 +287,43 @@ y = alt.x
     # Now you can assert units for symbols in both files
     check_unit(checker, "pkg.sub1.file1.x", m_unit)
     check_unit(checker, "pkg.sub2.file2.y", m_unit)
+
+
+def test_multi_file_type_alias(tmp_path: Path, package_files: dict[str, Path]):
+    """Check that type aliases can be imported."""
+    file1 = package_files["pkg.sub1.file1"]
+    (tmp_path / file1).write_text("""
+from typing import TypeAlias, Annotated, TypeVar
+T = TypeVar("T")
+metres: TypeAlias = Annotated[T, "unit:m"]
+""")
+    file2 = package_files["pkg.sub2.file2"]
+    (tmp_path / file2).write_text("""
+from pkg.sub1.file1 import metres
+a: metres[int] = 4
+""")
+    checker = UnitChecker()
+    checker.check([tmp_path / file2])
+
+    check_unit(checker, "pkg.sub2.file2.a", m_unit)
+
+
+def test_multi_file_type_alias_import_as(
+    tmp_path: Path, package_files: dict[str, Path]
+):
+    """Check that type aliases can be imported under another name."""
+    file1 = package_files["pkg.sub1.file1"]
+    (tmp_path / file1).write_text("""
+from typing import TypeAlias, Annotated, TypeVar
+T = TypeVar("T")
+metres: TypeAlias = Annotated[T, "unit:m"]
+""")
+    file2 = package_files["pkg.sub2.file2"]
+    (tmp_path / file2).write_text("""
+from pkg.sub1.file1 import metres as something_else
+a: something_else[int] = 4
+""")
+    checker = UnitChecker()
+    checker.check([tmp_path / file2])
+
+    check_unit(checker, "pkg.sub2.file2.a", m_unit)

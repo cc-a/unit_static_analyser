@@ -1052,6 +1052,57 @@ c = a**b
     )
 
 
+def test_type_alias_assignment(tmp_path: Path):
+    """Check unit annotation via type alias for assignments."""
+    checker = run_checker(
+        """
+from typing import TypeAlias, Annotated, TypeVar
+T = TypeVar("T")
+metres: TypeAlias = Annotated[T, "unit:m"]
+a: metres[int] = 2
+""",
+        tmp_path,
+    )
+    ((alias, unit),) = checker.aliases.items()
+    assert alias.fullname == "test_module.metres"
+    assert unit == m_unit
+    check_unit(checker, "a", m_unit)
+
+
+def test_type_alias_function_return(tmp_path: Path):
+    """Check unit annotation via type alias for function return types."""
+    checker = run_checker(
+        """
+from typing import TypeAlias, Annotated, TypeVar
+T = TypeVar("T")
+metres: TypeAlias = Annotated[T, "unit:m"]
+def f() -> metres[int]:
+    a: metres[int] = 4
+    return a
+""",
+        tmp_path,
+    )
+    ((func_def, unit),) = checker.function_units.items()
+    assert func_def.fullname == "test_module.f"
+    assert unit == m_unit
+
+
+def test_unit_type_alias_function_args(tmp_path: Path):
+    """Check unit annotation via type alias for function arguments."""
+    checker = run_checker(
+        """
+from typing import TypeAlias, Annotated, TypeVar
+T = TypeVar("T")
+metres: TypeAlias = Annotated[T, "unit:m"]
+def f(a: metres[int]):
+    pass
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "a", m_unit, prefix="")
+
+
 # def test_unit_test(tmp_path: Path):
 #     checker = run_checker(
 #         """
