@@ -4,7 +4,7 @@ from contextlib import suppress
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from .mypy_checker.checker import UnitChecker
+from .checker.checker import UnitChecker
 
 with suppress(PackageNotFoundError):
     __version__ = version(__name__)

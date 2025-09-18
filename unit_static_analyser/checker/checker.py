@@ -1,294 +1,658 @@
-"""UnitChecker module."""
+"""UnitChecker using mypy for type analysis.
 
-import ast
-from ..units.units import Unit
+This module provides a static analysis tool for extracting and checking physical units
+from Python code using type annotations and mypy's typed AST.
+"""
+
+from dataclasses import dataclass
+from graphlib import TopologicalSorter
+from pathlib import Path
+
+from mypy.build import BuildResult, BuildSource, State, build
+from mypy.nodes import (
+    AssignmentStmt,
+    CallExpr,
+    ClassDef,
+    ComparisonExpr,
+    ConditionalExpr,
+    Expression,
+    ExpressionStmt,
+    FuncDef,
+    IndexExpr,
+    IntExpr,
+    MemberExpr,
+    MypyFile,
+    NameExpr,
+    OpExpr,
+    ReturnStmt,
+    Statement,
+    StrExpr,
+    SymbolNode,
+    TupleExpr,
+    TypeAlias,
+    TypeInfo,
+    UnaryExpr,
+    Var,
+)
+from mypy.options import Options
+from mypy.types import CallableType, Instance, RawExpressionType, Type, UnboundType
+
+from unit_static_analyser.units import Unit
 
 
 class UnitCheckerError:
     """Represents a unit checking error."""
 
     def __init__(self, code: str, lineno: int, message: str):
+        """Initialise a new unit checking error."""
         self.code = code
         self.lineno = lineno
         self.message = message
 
-    def __repr__(self):
-        return f"UnitCheckerError(code={self.code!r}, lineno={self.lineno!r}, message={self.message!r})"
-
-
-class UnitChecker(ast.NodeVisitor):
-    """A static analysis visitor to check unit compatibility in Python code."""
-
-    def __init__(self, module_name="__main__") -> None:
-        """Initialize the UnitChecker with an empty unit mapping and error list."""
-        self.units: dict[str, Unit] = {}
-        self.errors: list[UnitCheckerError] = []
-        self.scope_stack: list[str] = [module_name]
-        self.instance_map: dict[str, str] = {}  # maps instance name to class name
-        self.function_return_units: dict[
-            str, Unit
-        ] = {}  # maps qualified function name to return unit
-        self.current_function: list[str] = []  # stack of current function names
-
-    def get_var_name(self, node: ast.AST) -> str | None:
-        """Recursively build the full attribute chain for nodes like A.B.c.d"""
-        if isinstance(node, ast.Name):
-            return node.id
-        elif isinstance(node, ast.Attribute):
-            value = self.get_var_name(node.value)
-            if value is not None:
-                # If value is an instance, resolve to its class
-                if value in self.instance_map:
-                    class_name = self.instance_map[value]
-                    return f"{class_name}.{node.attr}"
-                return f"{value}.{node.attr}"
-        return None
-
-    def scoped_key(self, var_name: str) -> str:
-        # Always prefix with the full scope stack (which starts with module name)
-        return ".".join(self.scope_stack + [var_name])
-
-    def lookup_unit(self, var_name: str) -> Unit | None:
-        # Try all possible scope prefixes, from innermost to outermost
-        for i in range(len(self.scope_stack), -1, -1):
-            scope = self.scope_stack[:i]
-            key = ".".join(scope + [var_name]) if scope else var_name
-            if key in self.units:
-                return self.units[key]
-        return None
-
-    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        if isinstance(node.target, ast.Name):
-            var_name = node.target.id
-            unit_str = self._extract_unit_from_annotation(node.annotation)
-            if unit_str is not None:
-                self.units[self.scoped_key(var_name)] = Unit.from_string(unit_str)
-
-    def visit_Assign(self, node: ast.Assign) -> None:
-        """Visit assignments to check unit operations and compatibility."""
-        # Track instance assignments: a = A()
-        if (
-            isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Name)
-        ):
-            self.instance_map[node.targets[0].id] = node.value.func.id
-            # Also handle assignment from function call: b = f()
-            func_name = node.value.func.id
-            # Try all possible qualified names from innermost to outermost
-            for i in range(len(self.scope_stack), -1, -1):
-                scope = self.scope_stack[:i]
-                qualified_func_name = (
-                    ".".join(scope + [func_name]) if scope else func_name
-                )
-                if qualified_func_name in self.function_return_units:
-                    self.units[self.scoped_key(node.targets[0].id)] = (
-                        self.function_return_units[qualified_func_name]
-                    )
-                    break
-            return
-
-        # Track variable aliasing: b = a
-        if (
-            isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Name)
-            and node.value.id in self.instance_map
-        ):
-            self.instance_map[node.targets[0].id] = self.instance_map[node.value.id]
-            return
-
-        # Assignment from function call: b = f()
-        if (
-            isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Name)
-        ):
-            func_name = node.value.func.id
-            if func_name in self.function_return_units:
-                self.units[self.scoped_key(node.targets[0].id)] = (
-                    self.function_return_units[func_name]
-                )
-            return
-
-        if isinstance(node.value, ast.BinOp):
-            left_var = node.value.left
-            right_var = node.value.right
-            op = node.value.op
-
-            if not (isinstance(node.targets[0], ast.Name)):
-                return
-
-            target = node.targets[0].id
-
-            left_var_name = self.get_var_name(left_var)
-            right_var_name = self.get_var_name(right_var)
-
-            left_unit = self.lookup_unit(left_var_name) if left_var_name else None
-            right_unit = self.lookup_unit(right_var_name) if right_var_name else None
-
-            if left_unit is None or right_unit is None:
-                self.errors.append(
-                    UnitCheckerError(
-                        code="U002",
-                        lineno=node.lineno,
-                        message="Operands must both have units",
-                    )
-                )
-                return
-
-            if isinstance(op, ast.Add):
-                if left_unit != right_unit:
-                    self.errors.append(
-                        UnitCheckerError(
-                            code="U001",
-                            lineno=node.lineno,
-                            message=f"Cannot add operands with different units: {left_unit} and {right_unit}",
-                        )
-                    )
-                    return
-                self.units[self.scoped_key(target)] = left_unit
-            elif isinstance(op, ast.Sub):
-                if left_unit != right_unit:
-                    self.errors.append(
-                        UnitCheckerError(
-                            code="U001",
-                            lineno=node.lineno,
-                            message=f"Cannot subtract operands with different units: {left_unit} and {right_unit}",
-                        )
-                    )
-                    return
-                self.units[self.scoped_key(target)] = left_unit
-            elif isinstance(op, ast.Mult):
-                result_unit = left_unit * right_unit
-                self.units[self.scoped_key(target)] = result_unit
-            elif isinstance(op, ast.Div):
-                result_unit = left_unit * (right_unit**-1)
-                self.units[self.scoped_key(target)] = result_unit
-            elif isinstance(op, ast.Pow):
-                if isinstance(node.value.right, ast.Constant) and isinstance(
-                    node.value.right.value, int
-                ):
-                    result_unit = left_unit**node.value.right.value
-                    self.units[self.scoped_key(target)] = result_unit
-                else:
-                    self.errors.append(
-                        UnitCheckerError(
-                            code="U003",
-                            lineno=node.lineno,
-                            message="Exponent must be an integer constant",
-                        )
-                    )
-            else:
-                self.errors.append(
-                    UnitCheckerError(
-                        code="U004",
-                        lineno=node.lineno,
-                        message=f"Unsupported operation for units: {type(op).__name__}",
-                    )
-                )
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self.scope_stack.append(node.name)
-        # Track function return unit if annotated
-        return_unit = (
-            self._extract_unit_from_annotation(node.returns) if node.returns else None
+    def __repr__(self) -> str:
+        """Return a string representation of the error."""
+        return (
+            "UnitCheckerError"
+            f"(code={self.code!r}, lineno={self.lineno!r}, message={self.message!r})"
         )
-        qualified_func_name = ".".join(self.scope_stack)
-        if return_unit is not None:
-            self.function_return_units[qualified_func_name] = Unit.from_string(
-                return_unit
+
+
+@dataclass
+class UnitNode:
+    """Dataclass associating a unit and mypy node."""
+
+    unit: Unit | None
+    node: SymbolNode | Instance | None
+
+
+class UnitChecker:
+    """Uses mypy's typed AST to extract and check units."""
+
+    @staticmethod
+    def _find_py_files_and_modules(paths: list[Path]) -> list[tuple[Path, str]]:
+        """Find all Python files with module names from a list of paths.
+
+        Returns:
+            List of tuples: (absolute file path, module name)
+        """
+        result: list[tuple[Path, str]] = []
+        for input_path in paths:
+            input_path = input_path.resolve()
+            if input_path.is_file() and input_path.suffix == ".py":
+                module_name = UnitChecker._module_name_from_path(input_path)
+                result.append((input_path, module_name))
+            elif input_path.is_dir():
+                for file_path in input_path.rglob("*.py"):
+                    file_path = file_path.resolve()
+                    module_name = UnitChecker._module_name_from_path(file_path)
+                    result.append((file_path, module_name))
+        return result
+
+    @staticmethod
+    def _module_name_from_path(file_path: "Path") -> str:
+        """Compute the module name for a Python file, including all parent packages.
+
+        For __init__.py, returns the package name.
+        """
+        # Walk up as long as __init__.py exists, for full package hierarchy
+        if file_path.name == "__init__.py":
+            parts = []
+            current = file_path.parent
+        else:
+            parts = [file_path.with_suffix("").name]
+            current = file_path.parent
+        while (current / "__init__.py").exists():
+            parts.insert(0, current.name)
+            current = current.parent
+        return ".".join(parts)
+
+    @staticmethod
+    def topological_sort_modules(
+        graph: dict[str, State], requested_modules: list[str]
+    ) -> list[str]:
+        """Return a list of module names sorted in dependency order."""
+        ts: TopologicalSorter[str] = TopologicalSorter()
+        for mod, state in graph.items():
+            if mod not in requested_modules:
+                continue
+            deps = [dep for dep in state.dependencies if dep in graph]
+            ts.add(mod, *deps)
+        return list(ts.static_order())
+
+    def __init__(self) -> None:
+        """Initialise a new checker.
+
+        Args:
+            module_name: module of interest
+        """
+        self.errors: list[UnitCheckerError] = []
+        self.units: dict[SymbolNode, Unit] = {}
+        self.aliases: dict[TypeAlias, Unit] = {}
+
+    def _get_function_return_unit(self, func_def: FuncDef) -> Unit | None:
+        unanalyzed_type = func_def.unanalyzed_type
+        if not isinstance(unanalyzed_type, CallableType):
+            return None
+        ret_unit: Unit | None = None
+        if isinstance(unanalyzed_type.ret_type, UnboundType):
+            if unit := self._extract_unit_from_type(unanalyzed_type.ret_type):
+                return unit
+        return ret_unit
+
+    def check(self, paths: list[Path]) -> None:
+        """Run check units annotations on the given file(s) or directory(ies).
+
+        Args:
+            paths: List of file or directory paths to analyze.
+        """
+        files_and_modules = self._find_py_files_and_modules(paths)
+        requested_modules = [module_name for _, module_name in files_and_modules]
+        top_level_modules = self._get_top_level_modules(requested_modules)
+        build_result = self._mypy_build(files_and_modules)
+        module_order = self.topological_sort_modules(
+            build_result.graph, requested_modules
+        )
+
+        for module_name in self._get_modules_for_unit_analysis(
+            module_order, top_level_modules
+        ):
+            if module_name.split(".")[0] not in top_level_modules:
+                continue
+            self._visit_mypy_file(build_result.files[module_name], module_name)
+
+    @staticmethod
+    def _mypy_build(files_and_modules: list[tuple[Path, str]]) -> BuildResult:
+        options = Options()
+        options.incremental = False
+        options.show_traceback = True
+        options.namespace_packages = True
+        options.ignore_missing_imports = True
+        options.follow_imports = "silent"
+        options.allow_untyped_globals = True
+        options.check_untyped_defs = False
+        options.use_builtins_fixtures = True
+        options.export_types = True
+        options.preserve_asts = True
+
+        python_path_roots: set[Path] = set()
+        for file_path, module_name in files_and_modules:
+            python_path_roots.add(
+                Path(*file_path.parts[: -len(module_name.split("."))])
             )
-        self.current_function.append(node.name)
-        self.generic_visit(node)
-        self.current_function.pop()
-        self.scope_stack.pop()
+        options.mypy_path = [str(path) for path in python_path_roots]
 
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        self.scope_stack.append(node.name)
-        # Handle inheritance: copy units from base classes
-        for base in node.bases:
-            if isinstance(base, ast.Name):
-                base_class = base.id
-                # Copy all units from base_class.<var> to current_class.<var>
-                # Use fully qualified names for prefix and current_prefix
-                prefix = ".".join(self.scope_stack[:-1] + [base_class]) + "."
-                current_prefix = ".".join(self.scope_stack) + "."
-                for key, unit in list(self.units.items()):
-                    if key.startswith(prefix):
-                        new_key = current_prefix + key[len(prefix) :]
-                        self.units[new_key] = unit
-        self.generic_visit(node)
-        self.scope_stack.pop()
+        sources = [
+            BuildSource(str(file), module_name, None)
+            for file, module_name in files_and_modules
+        ]
+        return build(sources=sources, options=options)
 
-    def visit_Return(self, node: ast.Return) -> None:
-        # Only check if inside a function with a return annotation
-        if not self.current_function:
-            return
-        func_name = self.current_function[-1]
-        qualified_func_name = ".".join(self.scope_stack)
-        expected_unit = self.function_return_units.get(qualified_func_name)
-        if expected_unit is None:
-            # If the returned value has a unit, but the function signature does not, error
-            return_var_name = self.get_var_name(node.value) if node.value else None
-            actual_unit = self.lookup_unit(return_var_name) if return_var_name else None
-            if actual_unit is not None:
-                self.errors.append(
-                    UnitCheckerError(
-                        code="U005",
-                        lineno=node.lineno,
-                        message="Units of returned value does not match function signature: returned={}, expected={}".format(
-                            actual_unit, expected_unit
-                        ),
+    @staticmethod
+    def _get_top_level_modules(module_names: list[str]) -> set[str]:
+        return {module_name.split(".")[0] for module_name in module_names}
+
+    @staticmethod
+    def _get_modules_for_unit_analysis(
+        module_order: list[str], top_level_modules: set[str]
+    ) -> list[str]:
+        return [
+            module_name
+            for module_name in module_order
+            if module_name.split(".")[0] in top_level_modules
+        ]
+
+    def _visit_mypy_file(self, mypy_file: MypyFile, module_name: str) -> None:
+        """Visit all top-level statements in the module."""
+        self.module_symbol_table = mypy_file.names
+        for stmt in mypy_file.defs:
+            self._visit_stmt(stmt)
+
+    def _visit_stmt(self, stmt: Statement) -> None:
+        """Visit a statement and extract/check units as appropriate."""
+        match stmt:
+            case AssignmentStmt():
+                self._process_assignment_stmt(stmt)
+            case FuncDef():
+                self._process_funcdef_stmt(stmt)
+            case ClassDef():
+                self._process_classdef_stmt(stmt)
+            case ExpressionStmt():
+                self._process_expression_stmt(stmt)
+            case _:
+                pass
+
+    def _process_assignment_stmt(self, stmt: AssignmentStmt) -> None:
+        """Process an assignment statement and extract/check units."""
+        if stmt.is_alias_def:
+            lvalue = stmt.lvalues[0]
+            if not isinstance(lvalue, NameExpr):
+                return None
+            alias = self.module_symbol_table[lvalue.name].node
+            if not isinstance(alias, TypeAlias):
+                return None
+            if not isinstance(stmt.rvalue, IndexExpr) or not isinstance(
+                stmt.rvalue.base, NameExpr
+            ):
+                return None
+            if stmt.rvalue.base.fullname == "typing.Annotated" and isinstance(
+                stmt.rvalue.index, TupleExpr
+            ):
+                try:
+                    item = stmt.rvalue.index.items[1]
+                except IndexError:
+                    return None
+                if isinstance(item, StrExpr) and item.value.startswith("unit:"):
+                    self.aliases[alias] = Unit.from_string(
+                        item.value.removeprefix("unit:")
                     )
-                )
-            return
-        # Try to get the unit of the returned value
-        return_var_name = self.get_var_name(node.value) if node.value else None
-        actual_unit = self.lookup_unit(return_var_name) if return_var_name else None
-        if actual_unit is None:
-            # Try to handle constant returns (e.g., return 1)
-            if isinstance(node.value, ast.Constant):
-                actual_unit = None
-        if actual_unit != expected_unit:
+        else:
+            for lvalue in stmt.lvalues:
+                key = self._analyse_expression(lvalue)
+                if not isinstance(key.node, Var):
+                    continue
+                annotated_unit: Unit | None = None
+                if stmt.unanalyzed_type and isinstance(
+                    stmt.unanalyzed_type, UnboundType
+                ):
+                    annotated_unit = self._extract_unit_from_type(stmt.unanalyzed_type)
+                inferred_unit = self._infer_unit_from_expression(stmt.rvalue)
+
+                if key.unit and annotated_unit and key.unit != annotated_unit:
+                    # todo
+                    self.errors.append(
+                        UnitCheckerError(
+                            code="U011",
+                            lineno=stmt.line,
+                            message="Variable already has a unit",
+                        )
+                    )
+                elif annotated_unit:
+                    self.units[key.node] = annotated_unit
+
+                expected_unit = self.units.get(key.node)
+
+                if isinstance(inferred_unit, Unit):
+                    if expected_unit and inferred_unit != expected_unit:
+                        self.errors.append(
+                            UnitCheckerError(
+                                code="U010",
+                                lineno=stmt.line,
+                                message=(
+                                    "Incompatible unit in assignment to "
+                                    f"{key.node.fullname}: expected {expected_unit}, "
+                                    f"received {inferred_unit}"
+                                ),
+                            )
+                        )
+                    self.units[key.node] = inferred_unit
+
+    def _process_funcdef_stmt(self, stmt: FuncDef) -> None:
+        """Process a function definition statement and extract/check units."""
+        # store function arguments first so these are available when processing
+        # the function body
+        for argument in stmt.arguments:
+            if isinstance(argument.type_annotation, UnboundType):
+                unit = self._extract_unit_from_type(argument.type_annotation)
+                if unit:
+                    self.units[argument.variable] = unit
+
+        for substmt in stmt.body.body:
+            self._visit_stmt(substmt)
+
+        return_unit = self._get_function_return_unit(stmt)
+        if return_unit:
+            self.units[stmt] = return_unit
+
+        # Check all ReturnStmt nodes for unit correctness
+        for substmt in stmt.body.body:
+            if isinstance(substmt, ReturnStmt) and substmt.expr is not None:
+                returned_unit = self._infer_unit_from_expression(substmt.expr)
+                if return_unit and returned_unit != return_unit:
+                    self.errors.append(
+                        UnitCheckerError(
+                            code="U004",
+                            lineno=substmt.line,
+                            message=(
+                                "Unit of return value does not match function "
+                                f"signature: returned {returned_unit}, "
+                                f"expected {return_unit}"
+                            ),
+                        )
+                    )
+
+    def _process_classdef_stmt(self, stmt: ClassDef) -> None:
+        """Process a class definition statement and extract/check units."""
+        for substmt in stmt.defs.body:
+            self._visit_stmt(substmt)
+
+    def _process_expression_stmt(self, stmt: ExpressionStmt) -> None:
+        """Process an expression statement."""
+        self._analyse_expression(stmt.expr)
+
+    def _process_name_expr(self, expr: NameExpr) -> UnitNode:
+        """Resolve a NameExpr to a Unit, TypeInfo, or FuncUnitDescription."""
+        # Variable or symbol lookup
+        if isinstance(expr.node, FuncDef | TypeInfo):
+            return UnitNode(None, expr.node)
+        elif isinstance(expr.node, Var):
+            return UnitNode(self.units.get(expr.node), expr.node)
+        elif expr.name in self.module_symbol_table:
+            # this seems to come up rarely that a name expr has no node
+            # in which case try a lookup in the module symbol table
+            sym_node = self.module_symbol_table.get(expr.name)
+            if sym_node and sym_node.node:
+                return UnitNode(self.units.get(sym_node.node), sym_node.node)
+        return UnitNode(None, None)
+
+    def _process_unary_expr(self, expr: UnaryExpr) -> UnitNode:
+        """Resolve a UnaryExpr to its operand's unit (unary ops do not change units)."""
+        return self._analyse_expression(expr.expr)
+
+    def _process_power_op(self, expr: OpExpr, left_unit: UnitNode) -> Unit | None:
+        """Resolve a OpExpr raising value to a power."""
+        if left_unit.unit is None:
+            return None
+        if not isinstance(expr.right, IntExpr):
             self.errors.append(
                 UnitCheckerError(
-                    code="U005",
-                    lineno=node.lineno,
-                    message="Units of returned value does not match function signature: returned={}, expected={}".format(
-                        actual_unit, expected_unit
+                    code="U009",
+                    lineno=expr.line,
+                    message="Exponent must be an explicit integer value.",
+                )
+            )
+            return None
+        exponent = expr.right.value
+        return left_unit.unit**exponent
+
+    def _process_op_expr(self, expr: OpExpr) -> UnitNode:
+        """Resolve an OpExpr (binary operator) to a unit, handling +, -, *, /."""
+        left_unit = self._analyse_expression(expr.left)
+        right_unit = self._analyse_expression(expr.right)
+        op = expr.op
+        has_left_unit = isinstance(left_unit.unit, Unit)
+        has_right_unit = isinstance(right_unit.unit, Unit)
+
+        if not has_left_unit and not has_right_unit:
+            # assume left and right nodes are interchangeable
+            return UnitNode(None, left_unit.node)
+
+        if op == "**":
+            return UnitNode(self._process_power_op(expr, left_unit), left_unit.node)
+
+        if has_left_unit != has_right_unit:  # effective xor
+            self.errors.append(
+                UnitCheckerError(
+                    code="U002",
+                    lineno=getattr(expr, "line", 0),
+                    message="Operands must both have units",
+                )
+            )
+            return UnitNode(None, left_unit.node)
+
+        if not isinstance(left_unit.unit, Unit):
+            return UnitNode(None, left_unit.node)
+        if not isinstance(right_unit.unit, Unit):
+            return UnitNode(None, left_unit.node)
+
+        if op in {"+", "-"}:
+            if left_unit.unit == right_unit.unit:
+                return left_unit
+            self.errors.append(
+                UnitCheckerError(
+                    code="U001",
+                    lineno=getattr(expr, "line", 0),
+                    message=(
+                        "Cannot add operands with different units: "
+                        f"{left_unit} and {right_unit}"
                     ),
                 )
             )
+            return UnitNode(None, left_unit.node)
+        elif op == "*":
+            return UnitNode(left_unit.unit * right_unit.unit, left_unit.node)
+        elif op == "/":
+            return UnitNode(left_unit.unit / right_unit.unit, left_unit.node)
+        return UnitNode(None, left_unit.node)
 
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        # Simulate: from other_module import var_with_units
-        module = node.module
-        for alias in node.names:
-            imported_name = alias.name
-            asname = alias.asname or imported_name
-            imported_key = f"{module}.{imported_name}"
-            local_key = self.scoped_key(asname)
-            if imported_key in self.units:
-                self.units[local_key] = self.units[imported_key]
+    def _infer_unit_from_expression(self, expr: Expression) -> Unit | None:
+        analysed = self._analyse_expression(expr)
+        return analysed.unit
 
-    def _extract_unit_from_annotation(self, annotation: ast.AST) -> str | None:
-        # Extract unit symbol from typing.Annotated[<type>, <unit>]
-        if isinstance(annotation, ast.Subscript):
-            ann_id = (
-                annotation.value.id
-                if isinstance(annotation.value, ast.Name)
-                else (
-                    annotation.value.attr
-                    if isinstance(annotation.value, ast.Attribute)
-                    else None
+    def _analyse_expression(self, expr: Expression) -> UnitNode:
+        """Recursively infer the unit for a given expression node.
+
+        Args:
+            expr: The mypy Expression node to analyze.
+
+        Returns:
+            The inferred Unit, TypeInfo, FuncUnitDescription, or None if not found.
+        """
+        match expr:
+            case NameExpr():
+                return self._process_name_expr(expr)
+            case UnaryExpr():
+                return self._process_unary_expr(expr)
+            case OpExpr():
+                return self._process_op_expr(expr)
+            case CallExpr():
+                return self._process_call_expr(expr)
+            case MemberExpr():
+                return self._process_member_expr(expr)
+            case ComparisonExpr():
+                self._process_comparison_expr(expr)
+                return UnitNode(None, None)
+            case ConditionalExpr():
+                return self._process_conditional_expr(expr)
+            case IndexExpr():
+                return self._process_index_expr(expr)
+            case _:
+                return UnitNode(None, None)
+
+    def _check_arguments_of_function_call(
+        self, func_def: FuncDef, args: list[Expression], line: int
+    ) -> None:
+        if func_def.info:
+            func_arguments = func_def.arguments[1:]
+        else:
+            func_arguments = func_def.arguments
+
+        for i, (arg, arg_def) in enumerate(zip(args, func_arguments)):
+            expected_unit = self.units.get(arg_def.variable)
+            if not expected_unit:
+                continue
+            inferred_unit = self._analyse_expression(arg).unit
+            if inferred_unit != expected_unit:
+                self.errors.append(
+                    UnitCheckerError(
+                        code="U003",
+                        lineno=line,
+                        message=(
+                            f"Argument {i + 1} to function '{func_def.fullname}' "
+                            f"has unit {inferred_unit}, expected {expected_unit}"
+                        ),
+                    )
+                )
+
+    def _process_call_expr(self, expr: CallExpr) -> UnitNode:
+        """Resolve a CallExpr (function or constructor call) to a unit or type."""
+        callee = self._analyse_expression(expr.callee)
+
+        node: Type | SymbolNode | Instance | None
+        if isinstance(callee.node, Var):
+            node = callee.node.type
+        else:
+            node = callee.node
+
+        if isinstance(node, FuncDef | Instance):
+            if isinstance(node, Instance):
+                sym_node = node.type.names.get("__call__")
+                if not sym_node or not isinstance(sym_node.node, FuncDef):
+                    return UnitNode(None, None)
+                func_def = sym_node.node
+            else:
+                func_def = node
+            self._check_arguments_of_function_call(func_def, expr.args, expr.line)
+            unit = self.units.get(func_def)
+            if isinstance(func_def.type, CallableType) and isinstance(
+                func_def.type.ret_type, Instance
+            ):
+                return UnitNode(unit, func_def.type.ret_type)
+        elif isinstance(node, TypeInfo):
+            # if __init__ is defined check arguments
+            sym_node = node.names.get("__init__")
+            if sym_node and isinstance(sym_node.node, FuncDef):
+                self._check_arguments_of_function_call(
+                    sym_node.node, expr.args, expr.line
+                )
+            # calling a class returns an instance
+            return UnitNode(None, Instance(node, []))
+        return callee
+
+    def _process_member_expr(self, expr: MemberExpr) -> UnitNode:
+        """Resolve a MemberExpr (attribute access), including chained attributes."""
+        if isinstance(expr.node, TypeInfo | Var):
+            # shortcut if mypy can already tell us what it is
+            return UnitNode(self.units.get(expr.node), expr.node)
+
+        base = self._analyse_expression(expr.expr)
+
+        base_node = base.node.type if isinstance(base.node, Var) else base.node
+
+        if isinstance(base_node, TypeInfo | Instance):
+            type_ = base_node if isinstance(base_node, TypeInfo) else base_node.type
+            if sym_node := type_.names.get(expr.name):
+                node = sym_node.node
+                if isinstance(node, Var):
+                    if isinstance(node.type, CallableType):
+                        # accessing a class that is an attribute of another class
+                        # lord knows why it's a CallableType
+                        return UnitNode(None, node.type.type_object())
+                    return UnitNode(self.units.get(node), node)
+                elif isinstance(node, FuncDef):
+                    return UnitNode(None, node)
+        return UnitNode(None, base.node)
+
+    ANNOTATED_TYPE_NAMES = ("typing.Annotated", "typing_extensions.Annotated")
+
+    def _extract_unit_from_type(self, type_: UnboundType) -> Unit | None:
+        """Extract a Unit from an assignment's type annotation if present.
+
+        Args:
+            type_: The type to analyse.
+
+        Returns:
+            The extracted Unit if available, otherwise None.
+        """
+        if not (sym_node := self.module_symbol_table.get(type_.name)):
+            return None
+
+        if isinstance(sym_node.node, TypeAlias):
+            return self.aliases.get(sym_node.node)
+        elif (
+            isinstance(sym_node.node, Var)
+            and sym_node.node.fullname == "typing.Annotated"
+        ):
+            arg = type_.args[1]
+            if not isinstance(arg, RawExpressionType) or not isinstance(
+                arg.literal_value, str
+            ):
+                return None
+            if arg.literal_value.startswith("unit:"):
+                return Unit.from_string(arg.literal_value.removeprefix("unit:"))
+        return None
+
+    def _process_comparison_expr(self, expr: ComparisonExpr) -> None:
+        """Process a ComparisonExpr (e.g., a < b, x == y).
+
+        Checks that all adjacent operands in the comparison have compatible units.
+        Returns None, as comparisons are always unitless (boolean).
+        """
+        operands = expr.operands
+        for i in range(len(operands) - 1):
+            left_unit = self._infer_unit_from_expression(operands[i])
+            right_unit = self._infer_unit_from_expression(operands[i + 1])
+            if not isinstance(left_unit, Unit) and not isinstance(right_unit, Unit):
+                return None
+            # Disallow if only one side has units
+            if isinstance(left_unit, Unit) != isinstance(right_unit, Unit):
+                self.errors.append(
+                    UnitCheckerError(
+                        code="U006",
+                        lineno=getattr(expr, "line", 0),
+                        message=(
+                            "Cannot compare a unitful operand with a unitless operand"
+                        ),
+                    )
+                )
+                return None
+            # Both sides have unit
+            if left_unit != right_unit:
+                self.errors.append(
+                    UnitCheckerError(
+                        code="U005",
+                        lineno=getattr(expr, "line", 0),
+                        message=(
+                            f"Cannot compare operands with different units: "
+                            f"{left_unit} and {right_unit}"
+                        ),
+                    )
+                )
+        # Comparison expressions are always unitless (boolean)
+        return None
+
+    def _process_conditional_expr(self, expr: ConditionalExpr) -> UnitNode:
+        """Process a ConditionalExpr (if-else expression).
+
+        Returns the unit if both branches match, otherwise emits U007 and returns None.
+        """
+        true_unit = self._analyse_expression(expr.if_expr)
+        false_unit = self._analyse_expression(expr.else_expr)
+        if isinstance(true_unit.unit, Unit) and isinstance(false_unit.unit, Unit):
+            if true_unit.unit == false_unit.unit:
+                return true_unit
+            else:
+                self.errors.append(
+                    UnitCheckerError(
+                        code="U007",
+                        lineno=expr.line,
+                        message=(
+                            f"Conditional branches have different units: "
+                            f"{true_unit.unit} and {false_unit.unit}"
+                        ),
+                    )
+                )
+                return UnitNode(None, true_unit.node)
+        # If only one branch has a unit, treat as error (unit mismatch)
+        if isinstance(true_unit.unit, Unit) != isinstance(
+            false_unit.unit, Unit
+        ):  # ^ is xor
+            self.errors.append(
+                UnitCheckerError(
+                    code="U008",
+                    lineno=getattr(expr, "line", 0),
+                    message=("Both branches of conditional must a unit."),
                 )
             )
-            if ann_id == "Annotated":
-                slice_value = annotation.slice
-                if isinstance(slice_value, ast.Tuple) and len(slice_value.elts) > 1:
-                    unit_elt = slice_value.elts[1]
-                    if isinstance(unit_elt, ast.Constant) and isinstance(
-                        unit_elt.value, str
-                    ):
-                        return unit_elt.value  # Extract string literal
-        return None
+            return UnitNode(None, true_unit.node)
+        # If neither branch has a unit, return None (unitless)
+        return UnitNode(None, true_unit.node)
+
+    def _process_index_expr(self, expr: IndexExpr) -> UnitNode:
+        base_unit = self._analyse_expression(expr.base)
+
+        # callable type maps to __getitem__ method
+        if isinstance(expr.method_type, CallableType):
+            item_type = expr.method_type.ret_type
+            node = None
+            if isinstance(item_type, CallableType):
+                # don't love this think it needs a rework
+                if isinstance(item_type.definition, FuncDef) and (
+                    unit := self.units.get(item_type.definition)
+                ):
+                    return UnitNode(unit, item_type.definition)
+                elif isinstance(item_type.ret_type, Instance):
+                    return UnitNode(base_unit.unit, item_type.ret_type.type)
+            elif isinstance(expr.method_type.ret_type, Instance):
+                node = expr.method_type.ret_type
+            return UnitNode(base_unit.unit, node)
+        return UnitNode(None, None)

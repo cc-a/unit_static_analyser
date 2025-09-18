@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from unit_static_analyser.mypy_checker.checker import UnitChecker
+from unit_static_analyser.checker.checker import UnitChecker
 from unit_static_analyser.units import Unit
 
 m_unit = Unit.from_string("m")
@@ -133,7 +133,7 @@ def check_unit(
     unit: Unit,
 ):
     """Helper function for checking a unit in the test module."""
-    for var, var_unit in checker.var_units.items():
+    for var, var_unit in checker.units.items():
         if var.fullname == f"{obj_path}":
             assert unit == var_unit
             break

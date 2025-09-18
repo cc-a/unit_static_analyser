@@ -1,7 +1,8 @@
-import ast
+from pathlib import Path
+
 import pytest
 
-from unit_static_analyser.checker.checker import UnitChecker
+from unit_static_analyser.mypy_checker.checker import UnitChecker, UnitCheckerError
 from unit_static_analyser.units import Unit
 
 # Define unit instances at module scope
@@ -9,319 +10,1289 @@ m_unit = Unit.from_string("m")
 s_unit = Unit.from_string("s")
 kg_unit = Unit.from_string("kg")
 
+TEST_MODULE_NAME = "test_module"
 
-def run_checker(code: str, module_name="__main__", external_units=None) -> UnitChecker:
-    tree = ast.parse(code)
-    checker = UnitChecker(module_name=module_name)
-    if external_units:
-        checker.units.update(external_units)
-    checker.visit(tree)
+
+def check_unit(
+    checker: UnitChecker,
+    obj_path: str,
+    unit: Unit,
+    prefix: str = f"{TEST_MODULE_NAME}.",
+):
+    """Helper function for checking a unit in the test module."""
+    for var, var_unit in checker.units.items():
+        if var.fullname == f"{prefix}{obj_path}":
+            assert unit == var_unit
+            break
+    else:
+        raise ValueError(f"Missing unit - {obj_path}")
+
+
+def run_checker(code: str, tmp_path: Path) -> UnitChecker:
+    """Run the UnitChecker on the given code using a temp file via pytest's tmp_path.
+
+    Args:
+        code: The Python code to analyze.
+        tmp_path: pytest's temporary directory fixture.
+        module_name: The module name to use for the analysis.
+        external_units: Optional dictionary of external units to include.
+
+    Returns:
+        The UnitChecker instance after analysis.
+    """
+    file_path = tmp_path / f"{TEST_MODULE_NAME}.py"
+    file_path.write_text(code)
+    checker = UnitChecker()
+    checker.check([file_path])
     return checker
 
 
-def assert_error(error, code, msg_contains=None):
+def assert_error(
+    error: UnitCheckerError, code: str, lineno: int, msg_contains: str = ""
+):
+    """Assert that an error matches the expected code, message content, and line number.
+
+    Args:
+        error: The UnitCheckerError instance to check.
+        code: The expected error code.
+        msg_contains: Optional substring that should be in the error message.
+        lineno: Optional expected line number for the error.
+    """
     assert error.code == code
-    if msg_contains:
-        assert msg_contains in error.message
+    assert error.lineno == lineno
+    assert msg_contains in error.message
 
 
-def assert_u005_error(error, returned_unit, expected_unit):
+def assert_error_u005(
+    error: UnitCheckerError, left_unit: Unit, right_unit: Unit, lineno: int
+):
+    """Assert that a U005 error matches expected left/right units and message."""
     assert error.code == "U005"
-    assert error.message.startswith(
-        "Units of returned value does not match function signature"
+    expected_msg = (
+        f"Cannot compare operands with different units: {left_unit} and {right_unit}"
     )
-    assert f"returned={returned_unit}" in error.message
-    assert f"expected={expected_unit}" in error.message
+    assert expected_msg in error.message
+    assert error.lineno == lineno
 
 
-def test_assignment():
-    checker = run_checker("""
-from typing import Annotated
-a: Annotated[int, "m"] = 1
-""")
-    assert checker.units["__main__.a"] == m_unit
+def assert_error_u006(error: UnitCheckerError, lineno: int):
+    """Assert that a U006 error matches expected left/right units and message."""
+    assert error.code == "U006"
+    expected_msg = "Cannot compare a unitful operand with a unitless operand"
+    assert expected_msg in error.message
+    assert error.lineno == lineno
 
 
-def test_addition():
-    checker = run_checker("""
-from typing import Annotated
-a: Annotated[int, "m"] = 1
-b: Annotated[int, "m"] = 2
-c = a + b
-""")
-    for name in ("a", "b", "c"):
-        assert checker.units[f"__main__.{name}"] == m_unit
-    assert not checker.errors
-
-
-def test_addition_error():
-    checker = run_checker("""
-from typing import Annotated
-a: Annotated[int, "m"] = 1
-b: Annotated[int, "s"] = 2
-c = a + b
-""")
-    assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
-
-
-def test_division_ok():
-    checker = run_checker("""
-from typing import Annotated
-a: Annotated[int, "m"] = 1
-b: Annotated[int, "s"] = 2
-c = a / b
-""")
-    assert checker.units["__main__.c"] == Unit.from_string("m.s^-1")
-
-
-def test_disallow_missing_units():
-    checker = run_checker("""
-from typing import Annotated
-a: Annotated[int, "m"] = 1
-b = a + 4
-""")
-    assert_error(checker.errors[0], "U002", "Operands must both have units")
-
-
-def test_function_scope():
-    checker = run_checker("""
-from typing import Annotated
-a: Annotated[int, "m"]
-def f():
-    a: Annotated[int, "s"]
-""")
-    assert checker.units["__main__.a"] == m_unit
-    assert checker.units["__main__.f.a"] == s_unit
-
-
-def test_nested_function_scope():
-    checker = run_checker("""
-from typing import Annotated
-a: Annotated[int, "m"]
-def f():
-    a: Annotated[int, "s"]
-    def g():
-        a: Annotated[int, "kg"]
-""")
-    assert checker.units["__main__.a"] == m_unit
-    assert checker.units["__main__.f.a"] == s_unit
-    assert checker.units["__main__.f.g.a"] == kg_unit
-
-
-def test_nested_scope_variable_lookup():
-    checker = run_checker("""
-from typing import Annotated
-a: Annotated[int, "m"]
-def f():
-    b: Annotated[int, "s"]
-    def g():
-        c = a + b
-""")
-    assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
-
-
-def test_nested_scope_variable_lookup_override():
-    checker = run_checker("""
-from typing import Annotated
-a: Annotated[int, "m"]
-def f():
-    b: Annotated[int, "m"]
-    def g():
-        b: Annotated[int, "s"]
-        c = a + b
-""")
-    assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
-
-
-def test_class_scope():
-    """Test that class variables are scoped correctly and can be accessed."""
-    checker = run_checker("""
-from typing import Annotated
-class A:
-    a: Annotated[int, "m"]
-""")
-    assert checker.units["__main__.A.a"] == m_unit
-
-
-def test_class_variable_lookup():
-    """Test that class variables can be accessed and used in expressions."""
-    checker = run_checker("""
-from typing import Annotated
-class A:
-    a: Annotated[int, "m"]
-b: Annotated[int, "m"]
-c = A.a + b
-""")
-    assert checker.units["__main__.c"] == m_unit
-
-
-def test_class_variable_lookup_nested():
-    """Test that class variables can be accessed in nested classes."""
-    checker = run_checker("""
-from typing import Annotated
-class A:
-    a: Annotated[int, "m"]
-    class B(self):
-        b: Annotated[int, "m"]
-c = A.a + A.B.b
-""")
-    assert checker.units["__main__.c"] == m_unit
-
-
-def test_class_inheritance():
-    """Test that class inheritance works correctly with unit annotations."""
-    checker = run_checker("""
-from typing import Annotated
-class A:
-    a: Annotated[int, "m"]
-class B(A):
-    b: Annotated[int, "s"]
-""")
-    assert checker.units["__main__.B.a"] == m_unit
-    assert checker.units["__main__.B.b"] == s_unit
-
-
-def test_instance_variable_lookup():
-    """Test that instance variables can be accessed and used in expressions."""
-    checker = run_checker("""
-from typing import Annotated
-class A:
-    a: Annotated[int, "m"] = 1
-a = A()
-b: Annotated[int, "m"]
-c = a.a + b
-""")
-    assert checker.units["__main__.c"] == m_unit
-
-
-def test_instance_variable_lookup_rename():
-    """Test that instance variables can be accessed and used in expressions."""
-    checker = run_checker("""
-from typing import Annotated
-class A:
-    a: Annotated[int, "m"] = 1
-a = A()
-b = a
-c: Annotated[int, "m"]
-d = b.a + c
-""")
-    assert checker.units["__main__.d"] == m_unit
-
-
-def test_instance_variable_lookup_error():
-    """Test that instance variables can be accessed and used in expressions."""
-    checker = run_checker("""
-from typing import Annotated
-class A:
-    a: Annotated[int, "m"] = 1
-a = A()
-b = a
-c: Annotated[int, "s"]
-d = b.a + c
-""")
-    assert_error(checker.errors[0], "U001", "Cannot add operands with different units")
-
-
-def test_function_return_value():
-    """Test that function return values are handled correctly."""
-    checker = run_checker("""
-from typing import Annotated
-def f() -> Annotated[int, "m"]:
-    a: Annotated[int, "m"]
-    return a
-b = f()
-""")
-    assert checker.units["__main__.b"] == m_unit
-
-
-def test_function_return_value_mismatch():
-    """Test that an error is reported if the wrong unit is returned from a function."""
-    checker = run_checker("""
-from typing import Annotated
-def f() -> Annotated[int, "m"]:
-    a: Annotated[int, "s"]
-    return a
-""")
-    assert_u005_error(
-        checker.errors[0],
-        returned_unit="s",
-        expected_unit="m",
+def assert_error_u007(
+    error: UnitCheckerError, if_unit: Unit, else_unit: Unit, lineno: int
+):
+    """Assert that a U007 error matches expected if/else units and message."""
+    assert error.code == "U007"
+    expected_msg = (
+        f"Conditional branches have different units: {if_unit} and {else_unit}"
     )
+    assert expected_msg in error.message
+    assert error.lineno == lineno
 
 
-def test_function_return_value_missing_units():
-    """Test that function signatures with return values are handled correctly."""
-    checker = run_checker("""
-from typing import Annotated
-def f() -> Annotated[int, "m"]:
-    return 1
-""")
-    assert_u005_error(
-        checker.errors[0],
-        returned_unit="None",
-        expected_unit="m",
-    )
+def assert_error_u008(error: UnitCheckerError, lineno: int):
+    """Assert that a U008 error matches expected message."""
+    assert error.code == "U008"
+    expected_msg = "Both branches of conditional must a unit."
+    assert expected_msg in error.message
+    assert error.lineno == lineno
 
 
-def test_function_return_value_nested():
-    """Test that function signatures with return values are handled correctly."""
-    checker = run_checker("""
-from typing import Annotated
-def f() -> Annotated[int, "m"]:
-    def f() -> Annotated[int, "m"]:
-        a: Annotated[int, "m"]
-        return a
-    return f()
-b = f()
-""")
-    assert checker.units["__main__.b"] == m_unit
-
-
-def test_function_return_value_nested_different_signatures():
-    """Test that function signatures with return values are handled correctly."""
-    checker = run_checker("""
-from typing import Annotated
-def f() -> Annotated[int, "m"]:
-    def f() -> Annotated[int, "s"]:
-        a: Annotated[int, "s"]
-        return a
-    a: Annotated[int, "m"]
-    return a
-b = f()
-""")
-    assert checker.units["__main__.b"] == m_unit
-
-
-def test_function_return_value_no_unit_in_signature():
-    """Test that function signatures with return values are handled correctly."""
-    checker = run_checker("""
-from typing import Annotated
-def f() -> int:
-    a: Annotated[int, "m"]
-    return a
-""")
-    assert_u005_error(
-        checker.errors[0],
-        returned_unit="m",
-        expected_unit="None",
-    )
-
-
-def test_module_import():
-    """Test that imported units are recognized."""
-    other_checker = run_checker(
-        """
-from typing import Annotated
-var_with_units: Annotated[int, "m"]
-""",
-        module_name="other_module",
-    )
+def test_assignment_arbitrary_expression(tmp_path: Path):
+    """Test that units are correctly inferred for arbitrary complex expressions."""
     checker = run_checker(
         """
 from typing import Annotated
-from other_module import var_with_units
+class A:
+    a: Annotated[int, "unit:m"]
+def f() -> A:
+    return A()
+b = f().a
 """,
-        external_units=other_checker.units,
+        tmp_path,
     )
-    assert checker.units["__main__.var_with_units"] == m_unit
-    assert checker.units["other_module.var_with_units"] == m_unit
+    check_unit(checker, "b", m_unit)
+
+
+def test_assignment_arbitrary_expression2(tmp_path: Path):
+    """Another test that units are inferred for arbitrary complex expressions."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+def f() -> A:
+    return A
+b = f().a
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", m_unit)
+
+
+def test_assignment_arbitrary_expression3(tmp_path: Path):
+    """Another test that units are inferred for arbitrary complex expressions."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+def f() -> A:
+    return A
+def f2(a: Annotated[int, "unit:s"]) -> Annotated[int, "unit:s"]:
+    return a
+b = f2(f().a)
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", s_unit)
+    assert_error(
+        checker.errors[0], "U003", 9, "Argument 1 to function 'test_module.f2'"
+    )
+    assert "has unit m, expected s" in checker.errors[0].message
+
+
+def test_function_return_instance(tmp_path: Path):
+    """Test unit lookups when operating on a object returned by a function."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+    def f(self, b: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
+        return self.a
+def f() -> A:
+    return A()
+b: Annotated[int, "unit:s"] = 1
+c = f().f(b)
+d = f().a
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0], "U003", 10, "Argument 1 to function 'test_module.A.f'"
+    )
+    assert "has unit s, expected m" in checker.errors[0].message
+    check_unit(checker, "c", m_unit)
+    check_unit(checker, "d", m_unit)
+
+
+def test_assignment_instance_attribute(tmp_path: Path):
+    """Test that units are correctly inferred for instance attribute access."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+a = A()
+b = a.a
+c = A().a
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", m_unit)
+    check_unit(checker, "c", m_unit)
+
+
+def test_assignment_member_access(tmp_path: Path):
+    """Test that units are correctly inferred for class attribute access."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+b = A.a
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", m_unit)
+
+
+def test_assignment_function_call(tmp_path: Path):
+    """Test units are inferred for function return values with unit annotations."""
+    checker = run_checker(
+        """
+from typing import Annotated
+def f() -> Annotated[int, "unit:m"]:
+    pass
+b = f()
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", m_unit)
+
+
+def test_assignment_class_init_member_access(tmp_path: Path):
+    """Test units are inferred for attribute access on instances created inline."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+b = A().a
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", m_unit)
+
+
+def test_assignment_alias(tmp_path: Path):
+    """Test that units are correctly propagated through variable aliasing."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"]
+b = a
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", m_unit)
+
+
+def test_assignment(tmp_path: Path):
+    """Test that units are correctly assigned to annotated variables."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+""",
+        tmp_path,
+    )
+    check_unit(checker, "a", m_unit)
+
+
+def test_addition(tmp_path: Path):
+    """Test addition of variables with same unit is allowed and unit is preserved."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:m"] = 2
+c = a + b
+""",
+        tmp_path,
+    )
+    for name in ("a", "b", "c"):
+        check_unit(checker, name, m_unit)
+    assert not checker.errors
+
+
+def test_addition_error(tmp_path: Path):
+    """Test that addition of variables with different units raises an error."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:s"] = 2
+c = a + b
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0], "U001", 5, "Cannot add operands with different units"
+    )
+
+
+def test_division_ok(tmp_path: Path):
+    """Test division of variables with units produces the correct resulting unit."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:s"] = 2
+c = a / b
+""",
+        tmp_path,
+    )
+    check_unit(checker, "c", Unit.from_string("m.s^-1"))
+
+
+def test_disallow_missing_units(tmp_path: Path):
+    """Test that operations involving unannotated values raise an error."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+b = a + 4
+""",
+        tmp_path,
+    )
+    assert_error(checker.errors[0], "U002", 4, "Operands must both have units")
+
+
+@pytest.mark.parametrize("symbol", ("+", "-"))
+def test_expression_unary(symbol: str, tmp_path: Path):
+    """Test that unary plus and minus preserve the unit of the operand."""
+    checker = run_checker(
+        f"""
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+b = {symbol}a
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", m_unit)
+
+
+def test_expression_instance_method(tmp_path: Path):
+    """Test that units are correctly inferred for return values of instance methods."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"] = 1
+    def f(self) -> Annotated[int, "unit:m"]:
+        return self.a
+b = A().f()
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", m_unit)
+
+
+def test_expression_nested_function_call_mismatch(tmp_path: Path):
+    """Test that unit mismatches are detected in nested function calls."""
+    checker = run_checker(
+        """
+from typing import Annotated
+def f1() -> Annotated[int, "unit:s"]:
+    a: Annotated[int, "unit:s"]
+    return a
+def f2(a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
+    return a
+a = f2(f1())
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0], "U003", 8, "Argument 1 to function 'test_module.f2'"
+    )
+    check_unit(checker, "a", m_unit)
+
+
+def test_expression_function_call_attribute_mismatch(tmp_path: Path):
+    """Test  unit mismatches are detected when passing class attributes to functions."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:s"]
+def f(a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
+    return a
+a = f(A.a)
+""",
+        tmp_path,
+    )
+    assert_error(checker.errors[0], "U003", 7, "Argument 1 to function 'test_module.f'")
+
+
+def test_expression_function_call_instance_attribute_mismatch(tmp_path: Path):
+    """Test unit mismatches are detected when using instance attributes in functions."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:s"]
+def f(a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
+    return a
+a = f(A().a)
+""",
+        tmp_path,
+    )
+    assert_error(checker.errors[0], "U003", 7, "Argument 1 to function 'test_module.f'")
+
+
+def test_expression_function_args(tmp_path: Path):
+    """Test that function arguments with correct units are accepted."""
+    checker = run_checker(
+        """
+from typing import Annotated
+def f(a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
+    return a
+a: Annotated[int, "unit:m"] = 1
+b = f(a)
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", m_unit)
+    check_unit(checker, "f", m_unit)
+
+
+def test_expression_method_args(tmp_path: Path):
+    """Test that method arguments with correct units are accepted."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    def f(self, a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
+        return a
+a: Annotated[int, "unit:m"] = 1
+b = A().f(a)
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", m_unit)
+
+
+def test_expression_function_args_mismatch(tmp_path: Path):
+    """Test that function arguments with incorrect units raise an error."""
+    checker = run_checker(
+        """
+from typing import Annotated
+def f(a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
+    return a
+a: Annotated[int, "unit:s"] = 1
+b = f(a)
+""",
+        tmp_path,
+    )
+    assert checker.errors, "Expected an error for unit mismatch in function argument"
+    assert_error(checker.errors[0], "U003", 6, "Argument 1 to function 'test_module.f'")
+    assert "has unit s, expected m" in checker.errors[0].message
+
+
+def test_method_args_mismatch(tmp_path: Path):
+    """Test that method arguments with incorrect units raise an error."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    def f(self, a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
+        return a
+a: Annotated[int, "unit:s"] = 1
+b = A().f(a)
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0], "U003", 7, "Argument 1 to function 'test_module.A.f'"
+    )
+    assert "has unit s, expected m" in checker.errors[0].message
+
+
+def test_function_no_return_type(tmp_path: Path):
+    """Test that functions without a return type annotation are handled gracefully."""
+    checker = run_checker(
+        """
+def f():
+    pass
+""",
+        tmp_path,
+    )
+    assert not checker.units
+
+
+def test_function_return_type_no_unit(tmp_path: Path):
+    """Test functions with non-unit return types are handled."""
+    checker = run_checker(
+        """
+def f() -> int:
+    pass
+""",
+        tmp_path,
+    )
+    assert not checker.units
+
+
+def test_function_return_type_wrong_unit(tmp_path: Path):
+    """Test returning a value with the wrong unit from a function raises an error."""
+    checker = run_checker(
+        """
+from typing import Annotated
+def f() -> Annotated[int, "unit:m"]:
+    a: Annotated[int, "unit:s"]
+    return a
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U004",
+        5,
+        "Unit of return value does not match function signature",
+    )
+
+
+def test_function_return_type_wrong_unit_nested(tmp_path: Path):
+    """Test that return unit mismatches are detected in nested function definitions."""
+    checker = run_checker(
+        """
+from typing import Annotated
+def f() -> Annotated[int, "unit:m"]:
+    def f2() -> Annotated[int, "unit:s"]:
+        a2: Annotated[int, "unit:m"]
+        return a2
+    a: Annotated[int, "unit:m"]
+    return a
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U004",
+        6,
+        "Unit of return value does not match function signature",
+    )
+
+
+# def test_nested_scope_variable_lookup():
+#     checker = run_checker("""
+# from typing import Annotated
+# a: Annotated[int, "m"]
+# def f():
+#     b: Annotated[int, "s"]
+#     def g():
+#         c = a + b
+# """)
+#     assert_error(
+#         checker.errors[0],
+#         "U001",
+#         "Cannot add operands with different units"
+#     )
+
+
+def test_function_bodies(tmp_path: Path):
+    """Test units are tracked within function bodies and errors are reported."""
+    checker = run_checker(
+        """
+from typing import Annotated
+def f():
+    a: Annotated[int, "unit:m"]
+    b: Annotated[int, "unit:s"]
+    c = a + b
+""",
+        tmp_path,
+    )
+    # check_unit(checker, "f.a", m_unit)
+    # check_unit(checker, "f.b", s_unit)
+    assert_error(
+        checker.errors[0], "U001", 6, "Cannot add operands with different units"
+    )
+
+
+def test_function_scope_lookup(tmp_path: Path):
+    """Test that function scope variable lookup works for return statements."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"]
+def f() -> Annotated[int, "unit:s"]:
+    return a
+""",
+        tmp_path,
+    )
+    assert checker
+
+
+def test_bare_expression(tmp_path: Path):
+    """Test that unit mismatches in expressions are detected and reported."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"]
+b: Annotated[int, "unit:s"]
+a + b
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0], "U001", 5, "Cannot add operands with different units"
+    )
+
+
+# def test_function_arg_units(tmp_path: Path):
+#     """Test that function arguments are recorded in checker.units."""
+#     checker = run_checker(
+#         """
+# from typing import Annotated
+# def f(a: Annotated[int, "m"]):
+#     pass
+# """,
+#         tmp_path,
+#     )
+#     check_unit(checker, "f.a", m_unit)
+
+
+def test_class_chaining(tmp_path: Path):
+    """Test resolution of expressions with chained class attributes."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+class B:
+    A = A
+    b: Annotated[int, "unit:m"]
+b = B().A.a
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", m_unit)
+
+
+def test_class_bodies(tmp_path: Path):
+    """Test that expressions in class bodies are evaluated."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+    b: Annotated[int, "unit:s"]
+    a + b
+""",
+        tmp_path,
+    )
+    check_unit(checker, "A.a", m_unit)
+    check_unit(checker, "A.b", s_unit)
+    assert_error(
+        checker.errors[0], "U001", 6, "Cannot add operands with different units"
+    )
+
+
+def test_closure_type_lookup(tmp_path: Path):
+    """Test closure scope lookups of classes."""
+    checker = run_checker(
+        """
+from typing import Annotated
+def f():
+    class A:
+        a: Annotated[int, "unit:m"]
+    def f2() -> Annotated[int, "unit:m"]:
+        b = A.a
+        return b
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "b", m_unit, prefix="")
+
+
+def test_closure_instance_lookup(tmp_path: Path):
+    """Test closure scope lookups of instances."""
+    checker = run_checker(
+        """
+from typing import Annotated
+def f() -> None: # annotation required for function variables to be typed
+    class A:
+        a: Annotated[int, "unit:m"]
+    b = A()
+    def f2() -> Annotated[int, "unit:m"]:
+        c = b.a
+        return c
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "c", m_unit, prefix="")
+
+
+def test_closure_function_lookup(tmp_path: Path):
+    """Test closue scope lookup of functi: Pathons."""
+    checker = run_checker(
+        """
+from typing import Annotated
+def f():
+    def f2() -> Annotated[int, "unit:m"]:
+        a: Annotated[int, "unit:m"]
+        return a
+    def f3() -> Annotated[int, "unit:m"]:
+        b = f2()
+        return b
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "b", m_unit, prefix="")
+
+
+def test_closure_variable_lookup(tmp_path: Path):
+    """Test closure scope lookup of variables."""
+    checker = run_checker(
+        """
+from typing import Annotated
+def f():
+    a: Annotated[int, "unit:m"] = 4
+    def f2() -> Annotated[int, "unit:m"]:
+        b = a
+        return b
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "a", m_unit, prefix="")
+    check_unit(checker, "b", m_unit, prefix="")
+
+
+def test_class_nested_scope_variable(tmp_path: Path):
+    """Test lookup of variables in arbitrarily nested scopes."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"]
+class A:
+    b: Annotated[int, "unit:s"]
+    def f(self) -> None:
+        c = a + self.b
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0], "U001", 7, "Cannot add operands with different units"
+    )
+
+
+def test_if_else_expr(tmp_path: Path):
+    """Test expressions containing if else conditional statements."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"]
+b: Annotated[int, "unit:m"]
+c: Annotated[int, "unit:s"]
+d: int
+e: int
+f = a if a > b else b  # fine - a and b have same unit
+a if a > b else c      # error - a and c have different units
+a if a > b else d      # error - a has units, d does not
+e if a > b else d      # fine - e and d both have no unit
+""",
+        tmp_path,
+    )
+    check_unit(checker, "f", m_unit)
+    assert_error_u007(checker.errors[0], m_unit, s_unit, lineno=9)
+    assert_error_u008(checker.errors[1], lineno=10)
+    assert len(checker.errors) == 2
+
+
+def test_comparison_expr(tmp_path: Path):
+    """Test expressions comparing units with numbers."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"]
+b: Annotated[int, "unit:m"]
+c: Annotated[int, "unit:s"]
+d: int
+e: int
+a == b # (units match, no error)
+b == c # (units differ, error)
+a == b == c # (b == c triggers error)
+a == d # (unitful and unitless, error)
+d == e # (both unitless, no error)
+""",
+        tmp_path,
+    )
+    assert_error_u005(checker.errors[0], m_unit, s_unit, lineno=9)
+    assert_error_u005(checker.errors[1], m_unit, s_unit, lineno=10)
+    assert_error_u006(checker.errors[2], lineno=11)
+    assert len(checker.errors) == 3
+
+
+# def test_module_import():
+#     """Test that imported units are recognized."""
+
+
+#     other_checker = run_checker(
+#         """
+# from typing import Annotated
+# var_with_units: Annotated[int, "m"]
+# """,
+#         module_name="other_module",
+#     )
+#     checker = run_checker(
+#         """
+# from typing import Annotated
+# from other_module import var_with_units
+# """,
+#         external_units=other_checker.units,
+#     )
+#     assert checker.units["__main__.var_with_units"] == m_unit
+#     assert checker.units["other_module.var_with_units"] == m_unit
+
+
+def test_class_init_attribute(tmp_path: Path):
+    """Test that attributes assigned during init statements are handled."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    def __init__(self):
+        self.a: Annotated[int, "unit:m"] = 1
+a = A()
+b = a.a
+c = A().a
+""",
+        tmp_path,
+    )
+    check_unit(checker, "A.a", m_unit)
+    check_unit(checker, "b", m_unit)
+    check_unit(checker, "c", m_unit)
+
+
+def test_class_self_lookup(tmp_path: Path):
+    """Test that accessing variables via self works as expected."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    def __init__(self):
+        self.a: Annotated[int, "unit:m"] = 1
+        self.b: Annotated[int, "unit:m"] = 2
+        self.c: Annotated[int, "unit:s"] = 3
+        self.d = self.a + self.b
+        self.b + self.c
+""",
+        tmp_path,
+    )
+    check_unit(checker, "A.d", m_unit)
+    assert_error(
+        checker.errors[0], "U001", 9, "Cannot add operands with different units"
+    )
+
+
+def test_call_instance(tmp_path: Path):
+    """Test that instance __call__ methods are treated correctly."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    def __call__(self) -> Annotated[int, "unit:m"]:
+        a: Annotated[int, "unit:m"]
+        return a
+a = A()
+b = a()
+c = A()()
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", m_unit)
+    check_unit(checker, "c", m_unit)
+
+
+def test_call_instance_error(tmp_path: Path):
+    """Test that instance __call__ methods are error checked."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    def __call__(self, a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
+        return a
+arg: Annotated[int, "unit:s"] = 1
+a = A()
+b = a(arg)
+c = A()(arg)
+""",
+        tmp_path,
+    )
+    assert checker.errors
+    error_msg = "Argument 1 to function 'test_module.A.__call__' has unit s, expected m"
+    assert_error(checker.errors[0], "U003", 8, error_msg)
+    assert_error(checker.errors[1], "U003", 9, error_msg)
+
+
+def test_bin_op_no_units(tmp_path: Path):
+    """Checker that binary operations without units work."""
+    checker = run_checker(
+        """
+a = 1
+b = 2
+a + b""",
+        tmp_path,
+    )
+    assert not checker.errors
+
+
+def test_bin_op_function(tmp_path: Path):
+    """Test binary operations for unusual types."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+def f() -> Annotated[int, "unit:m"]:
+    b: Annotated[int, "unit:m"]
+    return b
+a + f
+""",
+        tmp_path,
+    )
+    assert_error(checker.errors[0], "U002", 7, "Operands must both have units")
+
+
+def test_getitem(tmp_path: Path):
+    """Test units applied to containers and access of elements."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[list, "unit:m"] = [0, 1]
+b = a[0] + a[1]
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "a", m_unit)
+    check_unit(checker, "b", m_unit)
+
+
+def test_getitem_class(tmp_path: Path):
+    """Test index expr that returns a class."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"] = 3
+b = [A][0].a
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "b", m_unit)
+
+
+def test_getitem_instance(tmp_path: Path):
+    """Test index expr that returns an instance."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"] = 3
+b = [A()][0].a
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "b", m_unit)
+
+
+def test_getitem_function(tmp_path: Path):
+    """Test index expr that returns a function."""
+    checker = run_checker(
+        """
+from typing import Annotated
+def f() -> Annotated[int, "unit:m"]:
+    a: Annotated[int, "unit:m"] = 3
+    return a
+b = [f][0]()
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "b", m_unit)
+
+
+def test_function_init_set_self(tmp_path: Path):
+    """Test setting units from init functions."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    def __init__(self, a: Annotated[int, "unit:m"]):
+        self.a = a
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "A.a", m_unit)
+
+
+def test_power(tmp_path: Path):
+    """Test raising to a power."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[float, "unit:m"] = 3
+b = a**2
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "a", m_unit)
+    check_unit(checker, "b", m_unit**2)
+
+
+def test_power_float_error(tmp_path: Path):
+    """Test error if non integer value used as exponent."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[float, "unit:m"] = 3
+b = a**2.0
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0], "U009", 4, "Exponent must be an explicit integer value."
+    )
+
+
+def test_power_non_int(tmp_path: Path):
+    """Test error if non integer value used as exponent."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[float, "unit:m"] = 3
+b = 3
+c = a**b
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0], "U009", 5, "Exponent must be an explicit integer value."
+    )
+
+
+def test_type_alias_assignment(tmp_path: Path):
+    """Check unit annotation via type alias for assignments."""
+    checker = run_checker(
+        """
+from typing import TypeAlias, Annotated, TypeVar
+T = TypeVar("T")
+metres: TypeAlias = Annotated[T, "unit:m"]
+a: metres[int] = 2
+""",
+        tmp_path,
+    )
+    ((alias, unit),) = checker.aliases.items()
+    assert alias.fullname == "test_module.metres"
+    assert unit == m_unit
+    check_unit(checker, "a", m_unit)
+
+
+def test_type_alias_function_return(tmp_path: Path):
+    """Check unit annotation via type alias for function return types."""
+    checker = run_checker(
+        """
+from typing import TypeAlias, Annotated, TypeVar
+T = TypeVar("T")
+metres: TypeAlias = Annotated[T, "unit:m"]
+def f() -> metres[int]:
+    a: metres[int] = 4
+    return a
+""",
+        tmp_path,
+    )
+    check_unit(checker, "f", m_unit)
+
+
+def test_unit_type_alias_function_args(tmp_path: Path):
+    """Check unit annotation via type alias for function arguments."""
+    checker = run_checker(
+        """
+from typing import TypeAlias, Annotated, TypeVar
+T = TypeVar("T")
+metres: TypeAlias = Annotated[T, "unit:m"]
+def f(a: metres[int]):
+    pass
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "a", m_unit, prefix="")
+
+
+def test_unit_assignment_error(tmp_path: Path):
+    """Check unit errors during assignment."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:s"] = a
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U010",
+        lineno=4,
+        msg_contains=(
+            "Incompatible unit in assignment to test_module.b: expected s, received m"
+        ),
+    )
+
+
+def test_unit_assignment_class_attribute(tmp_path: Path):
+    """Test unit errors during assignment to class attributes."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:s"] = 1
+A.a = b
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U010",
+        lineno=6,
+        msg_contains=(
+            "Incompatible unit in assignment to test_module.A.a: expected m, received s"
+        ),
+    )
+
+
+def test_unit_assignment_instance_attribute(tmp_path: Path):
+    """Test unit errors during assignment to instances."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:s"] = 1
+a = A()
+a.a = b
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U010",
+        lineno=7,
+        msg_contains=(
+            "Incompatible unit in assignment to test_module.A.a: expected m, received s"
+        ),
+    )
+
+
+def test_unit_assignment_prevent_override(tmp_path: Path):
+    """Test preventing overrides using variable annotations."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+a: Annotated[int, "unit:s"] = 2
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U011",
+        lineno=4,
+        msg_contains="Variable already has a unit",
+    )
+
+
+def test_attribute_assignment_prevent_override(tmp_path: Path):
+    """Test preventing overrides using variable annotations for class attributes."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+A.a: Annotated[int, "unit:s"]
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U011",
+        lineno=5,
+        msg_contains="Variable already has a unit",
+    )
+
+
+def test_instance_attribute_assignment_prevent_override(tmp_path: Path):
+    """Test preventing overrides using variable annotations for class attributes."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+A().a: Annotated[int, "unit:s"]
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U011",
+        lineno=5,
+        msg_contains="Variable already has a unit",
+    )
+
+
+def test_class_set_attribute_error(tmp_path: Path):
+    """Check units are respected when setting attributes via method."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+    def method(self, a: Annotated[int, "unit:s"]):
+        self.a = a
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U010",
+        6,
+        "Incompatible unit in assignment to test_module.A.a: expected m, received s",
+    )
+
+
+def test_init_argument_error(tmp_path: Path):
+    """Check argument errors for __init__ methods."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    def __init__(self, a: Annotated[int, "unit:m"]):
+        pass
+b: Annotated[int, "unit:s"]
+A(b)
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U003",
+        7,
+        "Argument 1 to function 'test_module.A.__init__' has unit s, expected m",
+    )
+
+
+def test_unit_retrieval_depth(tmp_path: Path):
+    """Check expressions with nested units return unit from correct depth."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"] = 1
+b: Annotated[A, "unit:s"] = A()
+c = b.a
+""",
+        tmp_path,
+    )
+    check_unit(checker, "c", m_unit)
+
+
+# def test_unit_test(tmp_path: Path):
+#     checker = run_checker(
+#         """
+# from unit_static_analyser.units import Unit
+# m = Unit("m")
+# from typing import Annotated
+# a: Annotated[int, m]
+# b: Annotated[int, Unit("s")]
+# """,
+#         tmp_path,
+#     )
+#     check_unit(checker, "a", m_unit)
+
+
+# def test_quantity(tmp_path: Path):
+#     checker = run_checker(
+#         """
+# from unit_static_analyser import Seconds, Metres
+# M = Metres
+# a: Seconds[int] = 1
+# b: M[int] = 1
+# """,
+#         h,
+#     )
+#     check_unit(checker, "a", m_unit)
