@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from unit_static_analyser.mypy_checker.checker import UnitChecker, UnitCheckerError
+from unit_static_analyser.checker.checker import UnitChecker, UnitCheckerError
 from unit_static_analyser.units import Unit
 
 # Define unit instances at module scope
@@ -1269,6 +1269,39 @@ c = b.a
         tmp_path,
     )
     check_unit(checker, "c", m_unit)
+
+
+def test_getitem_any(tmp_path: Path):
+    """Test getitem where underlying type is Any."""
+    checker = run_checker(
+        """
+from typing import Any, Annotated
+class A:
+    def method(self) -> Annotated[int, "unit:m"]:
+        a: Annotated[Any, "unit:m"] = [0, 1]
+        b = a[0] - a[1]
+        return b
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+
+
+def test_type_alias_return(tmp_path: Path):
+    """Test calling a function typed with an alias returns the correct unit."""
+    checker = run_checker(
+        """
+from typing import Annotated, TypeAlias, TypeVar
+T = TypeVar("T")
+metres: TypeAlias = Annotated[T, "unit:m"]
+def f() -> metres[int]:
+    a: metres[int] = 1
+    return a
+a = f()
+""",
+        tmp_path,
+    )
+    check_unit(checker, "a", m_unit)
 
 
 # def test_unit_test(tmp_path: Path):

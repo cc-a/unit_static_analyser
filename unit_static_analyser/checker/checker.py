@@ -35,7 +35,15 @@ from mypy.nodes import (
     Var,
 )
 from mypy.options import Options
-from mypy.types import CallableType, Instance, RawExpressionType, Type, UnboundType
+from mypy.types import (
+    CallableType,
+    Instance,
+    RawExpressionType,
+    Type,
+    TypeAliasType,
+    UnboundType,
+    get_proper_type,
+)
 
 from unit_static_analyser.units import Unit
 
@@ -493,10 +501,16 @@ class UnitChecker:
                 func_def = node
             self._check_arguments_of_function_call(func_def, expr.args, expr.line)
             unit = self.units.get(func_def)
-            if isinstance(func_def.type, CallableType) and isinstance(
-                func_def.type.ret_type, Instance
-            ):
-                return UnitNode(unit, func_def.type.ret_type)
+            if isinstance(func_def.type, CallableType):
+                ret_type = None
+                if isinstance(func_def.type.ret_type, Instance):
+                    ret_type = func_def.type.ret_type
+                elif isinstance(func_def.type.ret_type, TypeAliasType):
+                    # deal with type aliases in the return type
+                    proper_type = get_proper_type(func_def.type.ret_type)
+                    if isinstance(proper_type, Instance):
+                        ret_type = proper_type
+                return UnitNode(unit, ret_type)
         elif isinstance(node, TypeInfo):
             # if __init__ is defined check arguments
             sym_node = node.names.get("__init__")
@@ -655,4 +669,4 @@ class UnitChecker:
             elif isinstance(expr.method_type.ret_type, Instance):
                 node = expr.method_type.ret_type
             return UnitNode(base_unit.unit, node)
-        return UnitNode(None, None)
+        return UnitNode(base_unit.unit, None)
