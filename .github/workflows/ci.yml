@@ -1,36 +1,40 @@
-name: Test and build
+name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
-  workflow_dispatch:
-  workflow_call:
+    branches:
+      - main
+      - develop
 
 jobs:
   test:
-    runs-on: ${{matrix.os}}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-        python-version: ['3.13']
+        python-version: [3.11, 3.13]
+        mypy-version: [1.0.0, 1.18.1]
 
     steps:
       - uses: actions/checkout@v4
-      - name: Install poetry
+
+      - name: Install Poetry
         run: pipx install poetry
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
         with:
-          python-version: ${{matrix.python-version}}
+          python-version: ${{ matrix.python-version }}
           cache: poetry
-      - name: Install dependencies
-        run: poetry install
+
+      - name: Install dependencies (including dev)
+        run: poetry install --with dev
+
+      - name: Install specific mypy version
+        run: poetry run pip install --force-reinstall mypy==${{ matrix.mypy-version }}
 
       - name: Run mypy
         run: poetry run mypy .
 
-      - name: Run tests
+      - name: Run pytest
         run: poetry run pytest
