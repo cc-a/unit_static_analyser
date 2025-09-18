@@ -45,24 +45,8 @@ from mypy.types import (
     get_proper_type,
 )
 
-from unit_static_analyser.units import Unit
-
-
-class UnitCheckerError:
-    """Represents a unit checking error."""
-
-    def __init__(self, code: str, lineno: int, message: str):
-        """Initialise a new unit checking error."""
-        self.code = code
-        self.lineno = lineno
-        self.message = message
-
-    def __repr__(self) -> str:
-        """Return a string representation of the error."""
-        return (
-            "UnitCheckerError"
-            f"(code={self.code!r}, lineno={self.lineno!r}, message={self.message!r})"
-        )
+from ..units import Unit
+from . import errors
 
 
 @dataclass
@@ -133,7 +117,7 @@ class UnitChecker:
         Args:
             module_name: module of interest
         """
-        self.errors: list[UnitCheckerError] = []
+        self.errors: list[errors.UnitCheckerError] = []
         self.units: dict[SymbolNode, Unit] = {}
         self.aliases: dict[TypeAlias, Unit] = {}
 
@@ -267,13 +251,7 @@ class UnitChecker:
 
                 if key.unit and annotated_unit and key.unit != annotated_unit:
                     # todo
-                    self.errors.append(
-                        UnitCheckerError(
-                            code="U011",
-                            lineno=stmt.line,
-                            message="Variable already has a unit",
-                        )
-                    )
+                    self.errors.append(errors.u011_error_factory(lineno=stmt.line))
                 elif annotated_unit:
                     self.units[key.node] = annotated_unit
 
@@ -282,14 +260,11 @@ class UnitChecker:
                 if isinstance(inferred_unit, Unit):
                     if expected_unit and inferred_unit != expected_unit:
                         self.errors.append(
-                            UnitCheckerError(
-                                code="U010",
+                            errors.u010_error_factory(
                                 lineno=stmt.line,
-                                message=(
-                                    "Incompatible unit in assignment to "
-                                    f"{key.node.fullname}: expected {expected_unit}, "
-                                    f"received {inferred_unit}"
-                                ),
+                                fullname=key.node.fullname,
+                                expected_unit=expected_unit,
+                                inferred_unit=inferred_unit,
                             )
                         )
                     self.units[key.node] = inferred_unit
@@ -317,14 +292,10 @@ class UnitChecker:
                 returned_unit = self._infer_unit_from_expression(substmt.expr)
                 if return_unit and returned_unit != return_unit:
                     self.errors.append(
-                        UnitCheckerError(
-                            code="U004",
+                        errors.u004_error_factory(
                             lineno=substmt.line,
-                            message=(
-                                "Unit of return value does not match function "
-                                f"signature: returned {returned_unit}, "
-                                f"expected {return_unit}"
-                            ),
+                            returned_unit=returned_unit,
+                            return_unit=return_unit,
                         )
                     )
 
@@ -361,13 +332,7 @@ class UnitChecker:
         if left_unit.unit is None:
             return None
         if not isinstance(expr.right, IntExpr):
-            self.errors.append(
-                UnitCheckerError(
-                    code="U009",
-                    lineno=expr.line,
-                    message="Exponent must be an explicit integer value.",
-                )
-            )
+            self.errors.append(errors.u009_error_factory(lineno=expr.line))
             return None
         exponent = expr.right.value
         return left_unit.unit**exponent
@@ -388,13 +353,7 @@ class UnitChecker:
             return UnitNode(self._process_power_op(expr, left_unit), left_unit.node)
 
         if has_left_unit != has_right_unit:  # effective xor
-            self.errors.append(
-                UnitCheckerError(
-                    code="U002",
-                    lineno=getattr(expr, "line", 0),
-                    message="Operands must both have units",
-                )
-            )
+            self.errors.append(errors.u002_error_factory(lineno=expr.line))
             return UnitNode(None, left_unit.node)
 
         if not isinstance(left_unit.unit, Unit):
@@ -406,13 +365,10 @@ class UnitChecker:
             if left_unit.unit == right_unit.unit:
                 return left_unit
             self.errors.append(
-                UnitCheckerError(
-                    code="U001",
-                    lineno=getattr(expr, "line", 0),
-                    message=(
-                        "Cannot add operands with different units: "
-                        f"{left_unit} and {right_unit}"
-                    ),
+                errors.u001_error_factory(
+                    lineno=expr.line,
+                    left_unit=left_unit.unit,
+                    right_unit=right_unit.unit,
                 )
             )
             return UnitNode(None, left_unit.node)
@@ -471,13 +427,12 @@ class UnitChecker:
             inferred_unit = self._analyse_expression(arg).unit
             if inferred_unit != expected_unit:
                 self.errors.append(
-                    UnitCheckerError(
-                        code="U003",
+                    errors.u003_error_factory(
                         lineno=line,
-                        message=(
-                            f"Argument {i + 1} to function '{func_def.fullname}' "
-                            f"has unit {inferred_unit}, expected {expected_unit}"
-                        ),
+                        arg_index=i + 1,
+                        func_fullname=func_def.fullname,
+                        inferred_unit=inferred_unit,
+                        expected_unit=expected_unit,
                     )
                 )
 
@@ -589,26 +544,13 @@ class UnitChecker:
                 return None
             # Disallow if only one side has units
             if isinstance(left_unit, Unit) != isinstance(right_unit, Unit):
-                self.errors.append(
-                    UnitCheckerError(
-                        code="U006",
-                        lineno=getattr(expr, "line", 0),
-                        message=(
-                            "Cannot compare a unitful operand with a unitless operand"
-                        ),
-                    )
-                )
+                self.errors.append(errors.u006_error_factory(lineno=expr.line))
                 return None
             # Both sides have unit
             if left_unit != right_unit:
                 self.errors.append(
-                    UnitCheckerError(
-                        code="U005",
-                        lineno=getattr(expr, "line", 0),
-                        message=(
-                            f"Cannot compare operands with different units: "
-                            f"{left_unit} and {right_unit}"
-                        ),
+                    errors.u005_error_factory(
+                        lineno=expr.line, left_unit=left_unit, right_unit=right_unit
                     )
                 )
         # Comparison expressions are always unitless (boolean)
@@ -626,13 +568,10 @@ class UnitChecker:
                 return true_unit
             else:
                 self.errors.append(
-                    UnitCheckerError(
-                        code="U007",
+                    errors.u007_error_factory(
                         lineno=expr.line,
-                        message=(
-                            f"Conditional branches have different units: "
-                            f"{true_unit.unit} and {false_unit.unit}"
-                        ),
+                        true_unit=true_unit.unit,
+                        false_unit=false_unit.unit,
                     )
                 )
                 return UnitNode(None, true_unit.node)
@@ -640,13 +579,7 @@ class UnitChecker:
         if isinstance(true_unit.unit, Unit) != isinstance(
             false_unit.unit, Unit
         ):  # ^ is xor
-            self.errors.append(
-                UnitCheckerError(
-                    code="U008",
-                    lineno=getattr(expr, "line", 0),
-                    message=("Both branches of conditional must a unit."),
-                )
-            )
+            self.errors.append(errors.u008_error_factory(lineno=expr.line))
             return UnitNode(None, true_unit.node)
         # If neither branch has a unit, return None (unitless)
         return UnitNode(None, true_unit.node)

@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from unit_static_analyser.checker.checker import UnitChecker, UnitCheckerError
+from unit_static_analyser.checker.checker import UnitChecker
+from unit_static_analyser.checker.errors import UnitCheckerError
 from unit_static_analyser.units import Unit
 
 # Define unit instances at module scope
@@ -47,60 +48,120 @@ def run_checker(code: str, tmp_path: Path) -> UnitChecker:
     return checker
 
 
-def assert_error(
-    error: UnitCheckerError, code: str, lineno: int, msg_contains: str = ""
-):
+def assert_error(error: UnitCheckerError, code: str, lineno: int, message: str):
     """Assert that an error matches the expected code, message content, and line number.
 
     Args:
         error: The UnitCheckerError instance to check.
         code: The expected error code.
-        msg_contains: Optional substring that should be in the error message.
         lineno: Optional expected line number for the error.
+        message: Optional substring that should be in the error message.
     """
     assert error.code == code
     assert error.lineno == lineno
-    assert msg_contains in error.message
+    assert message == error.message
+
+
+def assert_error_u001(
+    error: UnitCheckerError, lineno: int, left_unit: Unit, right_unit: Unit
+):
+    """Assert U001 error for incompatible addition units."""
+    expected_msg = (
+        f"Cannot add operands with different units: {left_unit} and {right_unit}"
+    )
+    assert_error(error, "U001", lineno, expected_msg)
+
+
+def assert_error_u002(error: UnitCheckerError, lineno: int):
+    """Assert U002 error for missing units in operands."""
+    expected_msg = "Operands must both have units"
+    assert_error(error, "U002", lineno, expected_msg)
+
+
+def assert_error_u003(
+    error: UnitCheckerError,
+    lineno: int,
+    func_name: str,
+    arg_num: int,
+    received_unit: Unit,
+    expected_unit: Unit,
+):
+    """Assert U003 error for function argument unit mismatch."""
+    expected_msg = (
+        f"Argument {arg_num} to function '{func_name}' has unit {received_unit}, "
+        f"expected {expected_unit}"
+    )
+    assert_error(error, "U003", lineno, expected_msg)
+
+
+def assert_error_u004(
+    error: UnitCheckerError, lineno: int, returned: Unit, expected: Unit
+):
+    """Assert U004 error for return value unit mismatch."""
+    expected_msg = (
+        "Unit of return value does not match function signature: "
+        f"returned {returned}, expected {expected}"
+    )
+    assert_error(error, "U004", lineno, expected_msg)
 
 
 def assert_error_u005(
     error: UnitCheckerError, left_unit: Unit, right_unit: Unit, lineno: int
 ):
     """Assert that a U005 error matches expected left/right units and message."""
-    assert error.code == "U005"
     expected_msg = (
         f"Cannot compare operands with different units: {left_unit} and {right_unit}"
     )
-    assert expected_msg in error.message
-    assert error.lineno == lineno
+    assert_error(error, "U005", lineno, expected_msg)
 
 
 def assert_error_u006(error: UnitCheckerError, lineno: int):
     """Assert that a U006 error matches expected left/right units and message."""
-    assert error.code == "U006"
     expected_msg = "Cannot compare a unitful operand with a unitless operand"
-    assert expected_msg in error.message
-    assert error.lineno == lineno
+    assert_error(error, "U006", lineno, expected_msg)
 
 
 def assert_error_u007(
     error: UnitCheckerError, if_unit: Unit, else_unit: Unit, lineno: int
 ):
     """Assert that a U007 error matches expected if/else units and message."""
-    assert error.code == "U007"
     expected_msg = (
         f"Conditional branches have different units: {if_unit} and {else_unit}"
     )
-    assert expected_msg in error.message
-    assert error.lineno == lineno
+    assert_error(error, "U007", lineno, expected_msg)
 
 
 def assert_error_u008(error: UnitCheckerError, lineno: int):
     """Assert that a U008 error matches expected message."""
-    assert error.code == "U008"
     expected_msg = "Both branches of conditional must a unit."
-    assert expected_msg in error.message
-    assert error.lineno == lineno
+    assert_error(error, "U008", lineno, expected_msg)
+
+
+def assert_error_u009(error: UnitCheckerError, lineno: int):
+    """Assert U009 error for non-integer exponent."""
+    expected_msg = "Exponent must be an explicit integer value."
+    assert_error(error, "U009", lineno, expected_msg)
+
+
+def assert_error_u010(
+    error: UnitCheckerError,
+    lineno: int,
+    var_name: str,
+    expected_unit: Unit,
+    received_unit: Unit,
+):
+    """Assert U010 error for incompatible assignment units."""
+    expected_msg = (
+        f"Incompatible unit in assignment to {var_name}: expected {expected_unit}, "
+        f"received {received_unit}"
+    )
+    assert_error(error, "U010", lineno, expected_msg)
+
+
+def assert_error_u011(error: UnitCheckerError, lineno: int):
+    """Assert U011 error for variable unit override."""
+    expected_msg = "Variable already has a unit"
+    assert_error(error, "U011", lineno, expected_msg)
 
 
 def test_assignment_arbitrary_expression(tmp_path: Path):
@@ -151,10 +212,7 @@ b = f2(f().a)
         tmp_path,
     )
     check_unit(checker, "b", s_unit)
-    assert_error(
-        checker.errors[0], "U003", 9, "Argument 1 to function 'test_module.f2'"
-    )
-    assert "has unit m, expected s" in checker.errors[0].message
+    assert_error_u003(checker.errors[0], 9, "test_module.f2", 1, m_unit, s_unit)
 
 
 def test_function_return_instance(tmp_path: Path):
@@ -174,10 +232,7 @@ d = f().a
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0], "U003", 10, "Argument 1 to function 'test_module.A.f'"
-    )
-    assert "has unit s, expected m" in checker.errors[0].message
+    assert_error_u003(checker.errors[0], 10, "test_module.A.f", 1, s_unit, m_unit)
     check_unit(checker, "c", m_unit)
     check_unit(checker, "d", m_unit)
 
@@ -293,9 +348,7 @@ c = a + b
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0], "U001", 5, "Cannot add operands with different units"
-    )
+    assert_error_u001(checker.errors[0], 5, m_unit, s_unit)
 
 
 def test_division_ok(tmp_path: Path):
@@ -322,7 +375,7 @@ b = a + 4
 """,
         tmp_path,
     )
-    assert_error(checker.errors[0], "U002", 4, "Operands must both have units")
+    assert_error_u002(checker.errors[0], 4)
 
 
 @pytest.mark.parametrize("symbol", ("+", "-"))
@@ -369,9 +422,7 @@ a = f2(f1())
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0], "U003", 8, "Argument 1 to function 'test_module.f2'"
-    )
+    assert_error_u003(checker.errors[0], 8, "test_module.f2", 1, s_unit, m_unit)
     check_unit(checker, "a", m_unit)
 
 
@@ -388,7 +439,7 @@ a = f(A.a)
 """,
         tmp_path,
     )
-    assert_error(checker.errors[0], "U003", 7, "Argument 1 to function 'test_module.f'")
+    assert_error_u003(checker.errors[0], 7, "test_module.f", 1, s_unit, m_unit)
 
 
 def test_expression_function_call_instance_attribute_mismatch(tmp_path: Path):
@@ -404,7 +455,7 @@ a = f(A().a)
 """,
         tmp_path,
     )
-    assert_error(checker.errors[0], "U003", 7, "Argument 1 to function 'test_module.f'")
+    assert_error_u003(checker.errors[0], 7, "test_module.f", 1, s_unit, m_unit)
 
 
 def test_expression_function_args(tmp_path: Path):
@@ -452,8 +503,7 @@ b = f(a)
         tmp_path,
     )
     assert checker.errors, "Expected an error for unit mismatch in function argument"
-    assert_error(checker.errors[0], "U003", 6, "Argument 1 to function 'test_module.f'")
-    assert "has unit s, expected m" in checker.errors[0].message
+    assert_error_u003(checker.errors[0], 6, "test_module.f", 1, s_unit, m_unit)
 
 
 def test_method_args_mismatch(tmp_path: Path):
@@ -469,10 +519,7 @@ b = A().f(a)
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0], "U003", 7, "Argument 1 to function 'test_module.A.f'"
-    )
-    assert "has unit s, expected m" in checker.errors[0].message
+    assert_error_u003(checker.errors[0], 7, "test_module.A.f", 1, s_unit, m_unit)
 
 
 def test_function_no_return_type(tmp_path: Path):
@@ -510,12 +557,7 @@ def f() -> Annotated[int, "unit:m"]:
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0],
-        "U004",
-        5,
-        "Unit of return value does not match function signature",
-    )
+    assert_error_u004(checker.errors[0], 5, s_unit, m_unit)
 
 
 def test_function_return_type_wrong_unit_nested(tmp_path: Path):
@@ -532,12 +574,7 @@ def f() -> Annotated[int, "unit:m"]:
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0],
-        "U004",
-        6,
-        "Unit of return value does not match function signature",
-    )
+    assert_error_u004(checker.errors[0], 6, m_unit, s_unit)
 
 
 # def test_nested_scope_variable_lookup():
@@ -570,9 +607,7 @@ def f():
     )
     # check_unit(checker, "f.a", m_unit)
     # check_unit(checker, "f.b", s_unit)
-    assert_error(
-        checker.errors[0], "U001", 6, "Cannot add operands with different units"
-    )
+    assert_error_u001(checker.errors[0], 6, m_unit, s_unit)
 
 
 def test_function_scope_lookup(tmp_path: Path):
@@ -600,9 +635,7 @@ a + b
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0], "U001", 5, "Cannot add operands with different units"
-    )
+    assert_error_u001(checker.errors[0], 5, m_unit, s_unit)
 
 
 # def test_function_arg_units(tmp_path: Path):
@@ -649,9 +682,7 @@ class A:
     )
     check_unit(checker, "A.a", m_unit)
     check_unit(checker, "A.b", s_unit)
-    assert_error(
-        checker.errors[0], "U001", 6, "Cannot add operands with different units"
-    )
+    assert_error_u001(checker.errors[0], 6, m_unit, s_unit)
 
 
 def test_closure_type_lookup(tmp_path: Path):
@@ -741,9 +772,7 @@ class A:
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0], "U001", 7, "Cannot add operands with different units"
-    )
+    assert_error_u001(checker.errors[0], 7, m_unit, s_unit)
 
 
 def test_if_else_expr(tmp_path: Path):
@@ -850,9 +879,7 @@ class A:
         tmp_path,
     )
     check_unit(checker, "A.d", m_unit)
-    assert_error(
-        checker.errors[0], "U001", 9, "Cannot add operands with different units"
-    )
+    assert_error_u001(checker.errors[0], 9, m_unit, s_unit)
 
 
 def test_call_instance(tmp_path: Path):
@@ -890,9 +917,8 @@ c = A()(arg)
         tmp_path,
     )
     assert checker.errors
-    error_msg = "Argument 1 to function 'test_module.A.__call__' has unit s, expected m"
-    assert_error(checker.errors[0], "U003", 8, error_msg)
-    assert_error(checker.errors[1], "U003", 9, error_msg)
+    assert_error_u003(checker.errors[0], 8, "test_module.A.__call__", 1, s_unit, m_unit)
+    assert_error_u003(checker.errors[1], 9, "test_module.A.__call__", 1, s_unit, m_unit)
 
 
 def test_bin_op_no_units(tmp_path: Path):
@@ -920,7 +946,7 @@ a + f
 """,
         tmp_path,
     )
-    assert_error(checker.errors[0], "U002", 7, "Operands must both have units")
+    assert_error_u002(checker.errors[0], 7)
 
 
 def test_getitem(tmp_path: Path):
@@ -1024,9 +1050,7 @@ b = a**2.0
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0], "U009", 4, "Exponent must be an explicit integer value."
-    )
+    assert_error_u009(checker.errors[0], 4)
 
 
 def test_power_non_int(tmp_path: Path):
@@ -1040,9 +1064,7 @@ c = a**b
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0], "U009", 5, "Exponent must be an explicit integer value."
-    )
+    assert_error_u009(checker.errors[0], 5)
 
 
 def test_type_alias_assignment(tmp_path: Path):
@@ -1104,14 +1126,7 @@ b: Annotated[int, "unit:s"] = a
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0],
-        "U010",
-        lineno=4,
-        msg_contains=(
-            "Incompatible unit in assignment to test_module.b: expected s, received m"
-        ),
-    )
+    assert_error_u010(checker.errors[0], 4, "test_module.b", s_unit, m_unit)
 
 
 def test_unit_assignment_class_attribute(tmp_path: Path):
@@ -1126,14 +1141,7 @@ A.a = b
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0],
-        "U010",
-        lineno=6,
-        msg_contains=(
-            "Incompatible unit in assignment to test_module.A.a: expected m, received s"
-        ),
-    )
+    assert_error_u010(checker.errors[0], 6, "test_module.A.a", m_unit, s_unit)
 
 
 def test_unit_assignment_instance_attribute(tmp_path: Path):
@@ -1149,14 +1157,7 @@ a.a = b
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0],
-        "U010",
-        lineno=7,
-        msg_contains=(
-            "Incompatible unit in assignment to test_module.A.a: expected m, received s"
-        ),
-    )
+    assert_error_u010(checker.errors[0], 7, "test_module.A.a", m_unit, s_unit)
 
 
 def test_unit_assignment_prevent_override(tmp_path: Path):
@@ -1169,12 +1170,7 @@ a: Annotated[int, "unit:s"] = 2
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0],
-        "U011",
-        lineno=4,
-        msg_contains="Variable already has a unit",
-    )
+    assert_error_u011(checker.errors[0], 4)
 
 
 def test_attribute_assignment_prevent_override(tmp_path: Path):
@@ -1188,12 +1184,7 @@ A.a: Annotated[int, "unit:s"]
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0],
-        "U011",
-        lineno=5,
-        msg_contains="Variable already has a unit",
-    )
+    assert_error_u011(checker.errors[0], 5)
 
 
 def test_instance_attribute_assignment_prevent_override(tmp_path: Path):
@@ -1207,12 +1198,7 @@ A().a: Annotated[int, "unit:s"]
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0],
-        "U011",
-        lineno=5,
-        msg_contains="Variable already has a unit",
-    )
+    assert_error_u011(checker.errors[0], 5)
 
 
 def test_class_set_attribute_error(tmp_path: Path):
@@ -1227,12 +1213,7 @@ class A:
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0],
-        "U010",
-        6,
-        "Incompatible unit in assignment to test_module.A.a: expected m, received s",
-    )
+    assert_error_u010(checker.errors[0], 6, "test_module.A.a", m_unit, s_unit)
 
 
 def test_init_argument_error(tmp_path: Path):
@@ -1248,12 +1229,7 @@ A(b)
 """,
         tmp_path,
     )
-    assert_error(
-        checker.errors[0],
-        "U003",
-        7,
-        "Argument 1 to function 'test_module.A.__init__' has unit s, expected m",
-    )
+    assert_error_u003(checker.errors[0], 7, "test_module.A.__init__", 1, s_unit, m_unit)
 
 
 def test_unit_retrieval_depth(tmp_path: Path):
