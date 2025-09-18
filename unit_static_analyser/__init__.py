@@ -25,8 +25,6 @@ def run() -> None:
 
     print("Unit checking completed.")
     print(f"Errors: {checker.errors}")
-    for key, val in checker.var_units.items():
+    print("Units:")
+    for key, val in checker.units.items():
         print(f"{key.fullname}: {val}")
-    print(f"Func units: {checker.function_units}")
-    for unit in checker.function_units.values():
-        print(unit)

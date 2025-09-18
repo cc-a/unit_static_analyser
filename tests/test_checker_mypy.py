@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-from mypy.nodes import TypeInfo
 
 from unit_static_analyser.mypy_checker.checker import UnitChecker, UnitCheckerError
 from unit_static_analyser.units import Unit
@@ -21,7 +20,7 @@ def check_unit(
     prefix: str = f"{TEST_MODULE_NAME}.",
 ):
     """Helper function for checking a unit in the test module."""
-    for var, var_unit in checker.var_units.items():
+    for var, var_unit in checker.units.items():
         if var.fullname == f"{prefix}{obj_path}":
             assert unit == var_unit
             break
@@ -220,7 +219,7 @@ def test_assignment_function_call(tmp_path: Path):
         """
 from typing import Annotated
 def f() -> Annotated[int, "unit:m"]:
-    a: Annotated[int, "unit:m"]
+    pass
 b = f()
 """,
         tmp_path,
@@ -421,9 +420,7 @@ b = f(a)
         tmp_path,
     )
     check_unit(checker, "b", m_unit)
-    ((func_def, func_units),) = checker.function_units.items()
-    assert func_def.name == "f"
-    assert func_units == m_unit
+    check_unit(checker, "f", m_unit)
 
 
 def test_expression_method_args(tmp_path: Path):
@@ -487,7 +484,7 @@ def f():
 """,
         tmp_path,
     )
-    assert f"{TEST_MODULE_NAME}.f" not in checker.function_units
+    assert not checker.units
 
 
 def test_function_return_type_no_unit(tmp_path: Path):
@@ -499,11 +496,7 @@ def f() -> int:
 """,
         tmp_path,
     )
-
-    ((func_def, func_units),) = checker.function_units.items()
-    assert func_def.name == "f"
-    assert isinstance(func_units, TypeInfo)
-    assert func_units.fullname == "builtins.int"
+    assert not checker.units
 
 
 def test_function_return_type_wrong_unit(tmp_path: Path):
@@ -1082,9 +1075,7 @@ def f() -> metres[int]:
 """,
         tmp_path,
     )
-    ((func_def, unit),) = checker.function_units.items()
-    assert func_def.fullname == "test_module.f"
-    assert unit == m_unit
+    check_unit(checker, "f", m_unit)
 
 
 def test_unit_type_alias_function_args(tmp_path: Path):
@@ -1101,6 +1092,183 @@ def f(a: metres[int]):
     )
     assert not checker.errors
     check_unit(checker, "a", m_unit, prefix="")
+
+
+def test_unit_assignment_error(tmp_path: Path):
+    """Check unit errors during assignment."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:s"] = a
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U010",
+        lineno=4,
+        msg_contains=(
+            "Incompatible unit in assignment to test_module.b: expected s, received m"
+        ),
+    )
+
+
+def test_unit_assignment_class_attribute(tmp_path: Path):
+    """Test unit errors during assignment to class attributes."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:s"] = 1
+A.a = b
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U010",
+        lineno=6,
+        msg_contains=(
+            "Incompatible unit in assignment to test_module.A.a: expected m, received s"
+        ),
+    )
+
+
+def test_unit_assignment_instance_attribute(tmp_path: Path):
+    """Test unit errors during assignment to instances."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:s"] = 1
+a = A()
+a.a = b
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U010",
+        lineno=7,
+        msg_contains=(
+            "Incompatible unit in assignment to test_module.A.a: expected m, received s"
+        ),
+    )
+
+
+def test_unit_assignment_prevent_override(tmp_path: Path):
+    """Test preventing overrides using variable annotations."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+a: Annotated[int, "unit:s"] = 2
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U011",
+        lineno=4,
+        msg_contains="Variable already has a unit",
+    )
+
+
+def test_attribute_assignment_prevent_override(tmp_path: Path):
+    """Test preventing overrides using variable annotations for class attributes."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+A.a: Annotated[int, "unit:s"]
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U011",
+        lineno=5,
+        msg_contains="Variable already has a unit",
+    )
+
+
+def test_instance_attribute_assignment_prevent_override(tmp_path: Path):
+    """Test preventing overrides using variable annotations for class attributes."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+A().a: Annotated[int, "unit:s"]
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U011",
+        lineno=5,
+        msg_contains="Variable already has a unit",
+    )
+
+
+def test_class_set_attribute_error(tmp_path: Path):
+    """Check units are respected when setting attributes via method."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"]
+    def method(self, a: Annotated[int, "unit:s"]):
+        self.a = a
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U010",
+        6,
+        "Incompatible unit in assignment to test_module.A.a: expected m, received s",
+    )
+
+
+def test_init_argument_error(tmp_path: Path):
+    """Check argument errors for __init__ methods."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    def __init__(self, a: Annotated[int, "unit:m"]):
+        pass
+b: Annotated[int, "unit:s"]
+A(b)
+""",
+        tmp_path,
+    )
+    assert_error(
+        checker.errors[0],
+        "U003",
+        7,
+        "Argument 1 to function 'test_module.A.__init__' has unit s, expected m",
+    )
+
+
+def test_unit_retrieval_depth(tmp_path: Path):
+    """Check expressions with nested units return unit from correct depth."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    a: Annotated[int, "unit:m"] = 1
+b: Annotated[A, "unit:s"] = A()
+c = b.a
+""",
+        tmp_path,
+    )
+    check_unit(checker, "c", m_unit)
 
 
 # def test_unit_test(tmp_path: Path):
