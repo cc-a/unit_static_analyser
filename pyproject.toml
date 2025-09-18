@@ -5,8 +5,8 @@ description = "Add units and physical quantities to Python with static analysis"
 authors = [{name = "Christopher Cave-Ayland", email = "c.cave-ayland@imperial.ac.uk"}]
 
 [tool.poetry.dependencies]
-python = "^3.13"
-mypy = "^1.16.1"
+python = ">=3.11"
+mypy = ">=1.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"
