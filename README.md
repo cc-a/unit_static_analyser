@@ -168,7 +168,7 @@ b = a[0]  # b inherits unit of m
   expression e.g. `a = 1` as int, without the need to provide an explicit type hint.
   However in order to add unit information we have to explicitly provide the type in the
   annotation.
-- As it is built on top of Pypy it may not be compatible with other type checkers. In
+- As it is built on top of Mypy it may not be compatible with other type checkers. In
   particular Pyright does not like the use of type aliases for declaring units.
 - Limited understanding of third party libraries. Consider for instance:
 
