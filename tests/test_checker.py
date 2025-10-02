@@ -1280,6 +1280,62 @@ a = f()
     check_unit(checker, "a", m_unit)
 
 
+def test_operator_assignment(tmp_path: Path):
+    """Test operator assignment statement."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:m"] = 1
+a += b
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+
+
+def test_operator_assignment_no_units(tmp_path: Path):
+    """Test operator assignment statement with no units on either side."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a = 1
+b = 1
+a += b
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+
+
+def test_operator_assignment_missing_left(tmp_path: Path):
+    """Test operator assignment statement with unit missing on left hand side."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a = 1
+b: Annotated[int, "unit:m"] = 1
+a += b
+""",
+        tmp_path,
+    )
+    assert_error_u002(checker.errors[0], 5)
+
+
+def test_operator_assignment_missing_right(tmp_path: Path):
+    """Test operator assignment statement with unit missing on right hand side."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+b = 1
+a += b
+""",
+        tmp_path,
+    )
+    assert_error_u002(checker.errors[0], 5)
+
+
 # def test_unit_test(tmp_path: Path):
 #     checker = run_checker(
 #         """

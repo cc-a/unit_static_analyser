@@ -23,6 +23,7 @@ from mypy.nodes import (
     MemberExpr,
     MypyFile,
     NameExpr,
+    OperatorAssignmentStmt,
     OpExpr,
     ReturnStmt,
     Statement,
@@ -210,8 +211,26 @@ class UnitChecker:
                 self._process_classdef_stmt(stmt)
             case ExpressionStmt():
                 self._process_expression_stmt(stmt)
+            case OperatorAssignmentStmt():
+                self._process_operator_assignment_stmt(stmt)
             case _:
                 pass
+
+    def _process_operator_assignment_stmt(self, stmt: OperatorAssignmentStmt) -> None:
+        """Process an operator assignment statement (e.g., a += b)."""
+        left_unit_node = self._analyse_expression(stmt.lvalue)
+        right_unit = self._infer_unit_from_expression(stmt.rvalue)
+        if bool(left_unit_node.unit) != bool(right_unit):
+            self.errors.append(errors.u002_error_factory(lineno=stmt.line))
+        elif left_unit_node.unit and right_unit and left_unit_node.unit != right_unit:
+            self.errors.append(
+                errors.u001_error_factory(
+                    lineno=stmt.line,
+                    left_unit=left_unit_node.unit,
+                    right_unit=right_unit,
+                )
+            )
+        return None
 
     def _process_assignment_stmt(self, stmt: AssignmentStmt) -> None:
         """Process an assignment statement and extract/check units."""
