@@ -130,7 +130,7 @@ def u009_error_factory(lineno: int) -> UnitCheckerError:
 
 
 def u010_error_factory(
-    lineno: int, fullname: str, expected_unit: Unit, inferred_unit: Unit
+    lineno: int, fullname: str, expected_unit: Unit, inferred_unit: Unit | None
 ) -> UnitCheckerError:
     """Factory for U010: Incompatible unit in assignment."""
     return UnitCheckerError(

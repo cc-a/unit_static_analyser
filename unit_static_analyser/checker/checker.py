@@ -15,6 +15,7 @@ from mypy.nodes import (
     ClassDef,
     ComparisonExpr,
     ConditionalExpr,
+    Decorator,
     Expression,
     ExpressionStmt,
     FuncDef,
@@ -25,6 +26,7 @@ from mypy.nodes import (
     NameExpr,
     OperatorAssignmentStmt,
     OpExpr,
+    OverloadedFuncDef,
     ReturnStmt,
     Statement,
     StrExpr,
@@ -207,6 +209,10 @@ class UnitChecker:
                 self._process_assignment_stmt(stmt)
             case FuncDef():
                 self._process_funcdef_stmt(stmt)
+            case Decorator():
+                self._process_funcdef_stmt(stmt.func)
+            case OverloadedFuncDef():
+                self._process_overloaded_funcdef_stmt(stmt)
             case ClassDef():
                 self._process_classdef_stmt(stmt)
             case ExpressionStmt():
@@ -215,6 +221,18 @@ class UnitChecker:
                 self._process_operator_assignment_stmt(stmt)
             case _:
                 pass
+
+    def _process_overloaded_funcdef_stmt(self, stmt: OverloadedFuncDef) -> None:
+        """Process an overloaded function definition statement."""
+        if not stmt.is_property:
+            raise NotImplementedError("Overloaded functions not supported")
+
+        item = stmt.items[0]
+        if not isinstance(item, Decorator):
+            return None
+        unit = self._process_funcdef_stmt(item.func)
+        if unit:
+            self.units[stmt] = unit
 
     def _process_operator_assignment_stmt(self, stmt: OperatorAssignmentStmt) -> None:
         """Process an operator assignment statement (e.g., a += b)."""
@@ -264,8 +282,9 @@ class UnitChecker:
         else:
             for lvalue in stmt.lvalues:
                 key = self._analyse_expression(lvalue)
+                inferred_unit = key.unit
 
-                inferred_unit = self._infer_unit_from_expression(stmt.rvalue)
+                right_unit = self._infer_unit_from_expression(stmt.rvalue)
 
                 annotated_unit: Unit | None = None
                 if isinstance(key.node, Var):
@@ -276,29 +295,40 @@ class UnitChecker:
                             stmt.unanalyzed_type
                         )
 
-                if key.unit and annotated_unit and key.unit != annotated_unit:
+                if inferred_unit and annotated_unit and inferred_unit != annotated_unit:
                     self.errors.append(errors.u011_error_factory(lineno=stmt.line))
-                elif annotated_unit and isinstance(key.node, Var):
-                    self.units[key.node] = annotated_unit
+                if isinstance(key.node, Var):
+                    if unit := (annotated_unit or right_unit):
+                        self.units[key.node] = unit
 
-                expected_unit = annotated_unit or key.unit
-
-                if isinstance(inferred_unit, Unit):
-                    if expected_unit and inferred_unit != expected_unit:
+                if annotated_unit and not inferred_unit:
+                    # rhs must match annotated unit or can have no unit
+                    if right_unit and right_unit != annotated_unit:
                         self.errors.append(
                             errors.u010_error_factory(
                                 lineno=stmt.line,
                                 fullname=key.node.fullname
                                 if isinstance(key.node, Var)
                                 else "expression",
-                                expected_unit=expected_unit,
-                                inferred_unit=inferred_unit,
+                                expected_unit=annotated_unit,
+                                inferred_unit=right_unit,
                             )
                         )
-                    if isinstance(key.node, Var):
-                        self.units[key.node] = inferred_unit
+                elif inferred_unit:
+                    # if inferred then must match rhs
+                    if not right_unit or inferred_unit != right_unit:
+                        self.errors.append(
+                            errors.u010_error_factory(
+                                lineno=stmt.line,
+                                fullname=key.node.fullname
+                                if isinstance(key.node, Var)
+                                else "expression",
+                                expected_unit=inferred_unit,
+                                inferred_unit=right_unit,
+                            )
+                        )
 
-    def _process_funcdef_stmt(self, stmt: FuncDef) -> None:
+    def _process_funcdef_stmt(self, stmt: FuncDef) -> Unit | None:
         """Process a function definition statement and extract/check units."""
         # store function arguments first so these are available when processing
         # the function body
@@ -327,6 +357,7 @@ class UnitChecker:
                             return_unit=return_unit,
                         )
                     )
+        return return_unit
 
     def _process_classdef_stmt(self, stmt: ClassDef) -> None:
         """Process a class definition statement and extract/check units."""
@@ -528,6 +559,11 @@ class UnitChecker:
                     return UnitNode(self.units.get(node), node)
                 elif isinstance(node, FuncDef):
                     return UnitNode(None, node)
+                elif isinstance(node, Decorator):
+                    return UnitNode(self.units.get(node.func), node.func)
+                elif isinstance(node, OverloadedFuncDef):
+                    return UnitNode(self.units.get(node), node)
+
         return UnitNode(None, base.node)
 
     ANNOTATED_TYPE_NAMES = ("typing.Annotated", "typing_extensions.Annotated")

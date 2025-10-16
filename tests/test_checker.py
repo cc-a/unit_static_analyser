@@ -148,7 +148,7 @@ def assert_error_u010(
     lineno: int,
     var_name: str,
     expected_unit: Unit,
-    received_unit: Unit,
+    received_unit: Unit | None,
 ):
     """Assert U010 error for incompatible assignment units."""
     expected_msg = (
@@ -1383,3 +1383,66 @@ a[0] = b
         tmp_path,
     )
     assert_error_u010(checker.errors[0], 5, "expression", m_unit, s_unit)
+
+
+def test_property(tmp_path: Path):
+    """Test that property getters provide units."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    @property
+    def a(self) -> Annotated[int, "unit:m"]:
+        return 1
+b = A().a
+""",
+        tmp_path,
+    )
+    check_unit(checker, "b", m_unit)
+
+
+def test_property_setter(tmp_path: Path):
+    """Test that property setters enforce units."""
+    checker = run_checker(
+        """
+from typing import Annotated
+class A:
+    _a: Annotated[int, "unit:m"] = 1
+    @property
+    def a(self) -> Annotated[int, "unit:m"]:
+        return self._a
+    @a.setter
+    def a(self, value: Annotated[int, "unit:m"]):
+        self._a = value
+obj = A()
+obj.a = 2
+""",
+        tmp_path,
+    )
+    assert_error_u010(checker.errors[0], 12, "expression", m_unit, None)
+
+
+def test_assignment_to_existing_variable(tmp_path: Path):
+    """Test that re-assigning a variable with a different unit raises an error."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+a = 2
+""",
+        tmp_path,
+    )
+    assert_error_u010(checker.errors[0], 4, "test_module.a", m_unit, None)
+
+
+def test_assignment_to_existing_with_annotation(tmp_path: Path):
+    """Test that annotated units only accept unitless quantities on first definition."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+a: Annotated[int, "unit:m"] = 2
+""",
+        tmp_path,
+    )
+    assert_error_u010(checker.errors[0], 4, "test_module.a", m_unit, None)
