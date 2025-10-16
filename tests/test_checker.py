@@ -1383,30 +1383,3 @@ a[0] = b
         tmp_path,
     )
     assert_error_u010(checker.errors[0], 5, "expression", m_unit, s_unit)
-
-
-# def test_unit_test(tmp_path: Path):
-#     checker = run_checker(
-#         """
-# from unit_static_analyser.units import Unit
-# m = Unit("m")
-# from typing import Annotated
-# a: Annotated[int, m]
-# b: Annotated[int, Unit("s")]
-# """,
-#         tmp_path,
-#     )
-#     check_unit(checker, "a", m_unit)
-
-
-# def test_quantity(tmp_path: Path):
-#     checker = run_checker(
-#         """
-# from unit_static_analyser import Seconds, Metres
-# M = Metres
-# a: Seconds[int] = 1
-# b: M[int] = 1
-# """,
-#         h,
-#     )
-#     check_unit(checker, "a", m_unit)
