@@ -164,6 +164,12 @@ def assert_error_u011(error: UnitCheckerError, lineno: int):
     assert_error(error, "U011", lineno, expected_msg)
 
 
+def assert_error_u012(error: UnitCheckerError, lineno: int, operator: str):
+    """Assert U012 error for assignment operators."""
+    expected_msg = f"Cannot use {operator}= operator on expressions with units."
+    assert_error(error, "U012", lineno, expected_msg)
+
+
 def test_assignment_arbitrary_expression(tmp_path: Path):
     """Test that units are correctly inferred for arbitrary complex expressions."""
     checker = run_checker(
@@ -1334,6 +1340,49 @@ a += b
         tmp_path,
     )
     assert_error_u002(checker.errors[0], 5)
+
+
+@pytest.mark.parametrize("operator", ("*", "/"))
+def test_operator_assignment_unsupported(tmp_path: Path, operator: str):
+    """Check that unsupported operations are not allowed."""
+    checker = run_checker(
+        f"""
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+b: Annotated[int, "unit:s"] = 1
+a {operator}= b
+""",
+        tmp_path,
+    )
+    assert_error_u012(checker.errors[0], 5, operator)
+
+
+def test_dictionary_getitem(tmp_path: Path):
+    """Test that units are correctly inferred for dictionary values."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[dict, "unit:m"] = {"key1": 1, "key2": 2}
+b = a["key1"] + a["key2"]
+""",
+        tmp_path,
+    )
+    assert not checker.errors
+    check_unit(checker, "b", m_unit)
+
+
+def test_setitem(tmp_path: Path):
+    """Test that units are enforced when setting list items."""
+    checker = run_checker(
+        """
+from typing import Annotated
+a: Annotated[list, "unit:m"] = [1, 2, 3]
+b: Annotated[int, "unit:s"] = 4
+a[0] = b
+""",
+        tmp_path,
+    )
+    assert_error_u010(checker.errors[0], 5, "expression", m_unit, s_unit)
 
 
 # def test_unit_test(tmp_path: Path):

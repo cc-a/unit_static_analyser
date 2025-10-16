@@ -222,14 +222,19 @@ class UnitChecker:
         right_unit = self._infer_unit_from_expression(stmt.rvalue)
         if bool(left_unit_node.unit) != bool(right_unit):
             self.errors.append(errors.u002_error_factory(lineno=stmt.line))
-        elif left_unit_node.unit and right_unit and left_unit_node.unit != right_unit:
-            self.errors.append(
-                errors.u001_error_factory(
-                    lineno=stmt.line,
-                    left_unit=left_unit_node.unit,
-                    right_unit=right_unit,
+        elif left_unit_node.unit and right_unit:
+            if stmt.op not in ("+", "-"):
+                self.errors.append(
+                    errors.u012_error_factory(lineno=stmt.line, operator=stmt.op)
                 )
-            )
+            elif left_unit_node.unit != right_unit:
+                self.errors.append(
+                    errors.u001_error_factory(
+                        lineno=stmt.line,
+                        left_unit=left_unit_node.unit,
+                        right_unit=right_unit,
+                    )
+                )
         return None
 
     def _process_assignment_stmt(self, stmt: AssignmentStmt) -> None:
@@ -259,34 +264,39 @@ class UnitChecker:
         else:
             for lvalue in stmt.lvalues:
                 key = self._analyse_expression(lvalue)
-                if not isinstance(key.node, Var):
-                    continue
-                annotated_unit: Unit | None = None
-                if stmt.unanalyzed_type and isinstance(
-                    stmt.unanalyzed_type, UnboundType
-                ):
-                    annotated_unit = self._extract_unit_from_type(stmt.unanalyzed_type)
+
                 inferred_unit = self._infer_unit_from_expression(stmt.rvalue)
 
+                annotated_unit: Unit | None = None
+                if isinstance(key.node, Var):
+                    if stmt.unanalyzed_type and isinstance(
+                        stmt.unanalyzed_type, UnboundType
+                    ):
+                        annotated_unit = self._extract_unit_from_type(
+                            stmt.unanalyzed_type
+                        )
+
                 if key.unit and annotated_unit and key.unit != annotated_unit:
-                    # todo
                     self.errors.append(errors.u011_error_factory(lineno=stmt.line))
-                elif annotated_unit:
+                elif annotated_unit and isinstance(key.node, Var):
                     self.units[key.node] = annotated_unit
 
-                expected_unit = self.units.get(key.node)
+                expected_unit = annotated_unit or key.unit
 
                 if isinstance(inferred_unit, Unit):
                     if expected_unit and inferred_unit != expected_unit:
                         self.errors.append(
                             errors.u010_error_factory(
                                 lineno=stmt.line,
-                                fullname=key.node.fullname,
+                                fullname=key.node.fullname
+                                if isinstance(key.node, Var)
+                                else "expression",
                                 expected_unit=expected_unit,
                                 inferred_unit=inferred_unit,
                             )
                         )
-                    self.units[key.node] = inferred_unit
+                    if isinstance(key.node, Var):
+                        self.units[key.node] = inferred_unit
 
     def _process_funcdef_stmt(self, stmt: FuncDef) -> None:
         """Process a function definition statement and extract/check units."""

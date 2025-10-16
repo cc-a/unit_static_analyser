@@ -150,3 +150,12 @@ def u011_error_factory(lineno: int) -> UnitCheckerError:
         lineno=lineno,
         message="Variable already has a unit",
     )
+
+
+def u012_error_factory(lineno: int, operator: str) -> UnitCheckerError:
+    """Factory for U012: Cannot use {operator}= operator on expressions with units."""
+    return UnitCheckerError(
+        code="U012",
+        lineno=lineno,
+        message=f"Cannot use {operator}= operator on expressions with units.",
+    )
