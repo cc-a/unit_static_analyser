@@ -41,10 +41,11 @@ import numpy as np
 a: Annotated[np.ndarray, "unit:m"] = np.array([])
 ```
 
-Because it is a static analysis tools it avoids the compatibility drawbacks of some
-runtime libraries for handling units.
+As the tool uses type annotations it avoids the compatibility drawbacks of some runtime
+libraries for handling units.
 
-A simple [demo project] is available showing application of Unit Static Analyser to a simple molecular dynamics code.
+A simple [demo project] is available showing application of Unit Static Analyser to a
+simple molecular dynamics code.
 
 [demo project]: https://github.com/cc-a/unit_analysis_demo
 
@@ -57,9 +58,10 @@ as easily.
 
 Unit Static Analyser makes no assumptions about the units you want to use. All units are
 represented as strings with the prefix `"unit:"`. Units may be composed of multiple
-parts separated by `"."`. Unit parts may also be raised to powers using `"^"`. For
-instance `"unit:m.s^-1"` can be used to represent meters per second. Use of `"/"` is not
-supported. To be compatible units must have the same parts raised to the same powers.
+components separated by `"."`. Unit components may also be raised to powers using `"^"`.
+For instance `"unit:m.s^-1"` can be used to represent meters per second. Use of `"/"` is
+not supported. To be compatible units must have the same components raised to the same
+powers.
 
 ### Assigning Units
 
@@ -77,7 +79,8 @@ a: Annotated[int, "unit:m"] = 1
 b = a  # b now also has a unit of "m"
 ```
 
-When assigning a unit to a variable any expression that does not have a unit associated (or has a compatible unit) will be accepted:
+When assigning a unit to a variable any expression that does not have a unit associated
+(or has a compatible unit) will be accepted:
 
 ```python
 a: Annotated[int, "unit:m"] = 1
@@ -141,7 +144,7 @@ would report an error as 5 does not have unit information.
 
 ### Classes
 
-Both attributes and methods can be annotated be with units:
+Both attributes and methods can be annotated with units:
 
 ```python
 class A:
@@ -179,7 +182,8 @@ b = a[0]  # b inherits unit of m
 
   Static Unit Analyser will record `b` as having no unit though intuitively one might
   expect it to have the same unit as `a`. This is because Unit Static Analyser doesn't
-  know anything about the methods of NumPy arrays and how to correctly infer units. You can add a unit for `b` e.g.:
+  know anything about the methods of NumPy arrays and how to correctly infer units. In
+  this case You can add a unit for `b` e.g.:
 
   ```python
   a: Annotated[np.ndarray, "unit:m"] = np.array([])
