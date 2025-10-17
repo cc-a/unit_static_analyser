@@ -1446,3 +1446,21 @@ a: Annotated[int, "unit:m"] = 2
         tmp_path,
     )
     assert_error_u010(checker.errors[0], 4, "test_module.a", m_unit, None)
+
+
+def test_overloaded_function_definition_not_implemented(tmp_path: Path):
+    """Overloaded functions are not supported."""
+    with pytest.raises(NotImplementedError):
+        run_checker(
+            """
+from typing import Annotated, overload
+class A:
+    @overload
+    def a(self, a: int) -> None:
+        pass
+    @overload
+    def a(self, a: str) -> None:
+        pass
+""",
+            tmp_path,
+        )
