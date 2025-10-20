@@ -327,3 +327,25 @@ a: something_else[int] = 4
     checker.check([tmp_path / file2])
 
     check_unit(checker, "pkg.sub2.file2.a", m_unit)
+
+
+def test_variable_module_mapping_multiple_files(
+    tmp_path: Path, package_files: dict[str, Path]
+):
+    """Test that variable to module mapping is correct across multiple files."""
+    file1 = package_files["pkg.sub1.file1"]
+    (tmp_path / file1).write_text("""
+from typing import Annotated
+a: Annotated[int, "unit:m"] = 1
+""")
+
+    file2 = package_files["pkg.sub2.file2"]
+    (tmp_path / file2).write_text("""
+from typing import Annotated
+b: Annotated[int, "unit:m"] = 1
+""")
+    checker = UnitChecker()
+    checker.check([tmp_path])
+    expected_var_modules = {"a": "pkg.sub1.file1", "b": "pkg.sub2.file2"}
+    for node, module_name in checker.node_module_names.items():
+        assert module_name == expected_var_modules[node.name]

@@ -123,6 +123,7 @@ class UnitChecker:
         self.errors: list[errors.UnitCheckerError] = []
         self.units: dict[SymbolNode, Unit] = {}
         self.aliases: dict[TypeAlias, Unit] = {}
+        self.node_module_names: dict[SymbolNode, str] = {}
 
     def _get_function_return_unit(self, func_def: FuncDef) -> Unit | None:
         unanalyzed_type = func_def.unanalyzed_type
@@ -133,6 +134,11 @@ class UnitChecker:
             if unit := self._extract_unit_from_type(unanalyzed_type.ret_type):
                 return unit
         return ret_unit
+
+    def _save_unit(self, node: SymbolNode, unit: Unit, module_name: str) -> None:
+        """Save the unit associated with a mypy SymbolNode."""
+        self.units[node] = unit
+        self.node_module_names[node] = module_name
 
     def check(self, paths: list[Path]) -> None:
         """Run check units annotations on the given file(s) or directory(ies).
@@ -199,6 +205,7 @@ class UnitChecker:
     def _visit_mypy_file(self, mypy_file: MypyFile, module_name: str) -> None:
         """Visit all top-level statements in the module."""
         self.module_symbol_table = mypy_file.names
+        self.current_module_name = mypy_file.fullname
         for stmt in mypy_file.defs:
             self._visit_stmt(stmt)
 
@@ -232,7 +239,7 @@ class UnitChecker:
             return None
         unit = self._process_funcdef_stmt(item.func)
         if unit:
-            self.units[stmt] = unit
+            self._save_unit(stmt, unit, self.current_module_name)
 
     def _process_operator_assignment_stmt(self, stmt: OperatorAssignmentStmt) -> None:
         """Process an operator assignment statement (e.g., a += b)."""
@@ -299,7 +306,7 @@ class UnitChecker:
                     self.errors.append(errors.u011_error_factory(lineno=stmt.line))
                 if isinstance(key.node, Var):
                     if unit := (annotated_unit or right_unit):
-                        self.units[key.node] = unit
+                        self._save_unit(key.node, unit, self.current_module_name)
 
                 if annotated_unit and not inferred_unit:
                     # rhs must match annotated unit or can have no unit
@@ -336,14 +343,14 @@ class UnitChecker:
             if isinstance(argument.type_annotation, UnboundType):
                 unit = self._extract_unit_from_type(argument.type_annotation)
                 if unit:
-                    self.units[argument.variable] = unit
+                    self._save_unit(argument.variable, unit, self.current_module_name)
 
         for substmt in stmt.body.body:
             self._visit_stmt(substmt)
 
         return_unit = self._get_function_return_unit(stmt)
         if return_unit:
-            self.units[stmt] = return_unit
+            self._save_unit(stmt, return_unit, self.current_module_name)
 
         # Check all ReturnStmt nodes for unit correctness
         for substmt in stmt.body.body:

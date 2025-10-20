@@ -286,6 +286,8 @@ b = f()
         tmp_path,
     )
     check_unit(checker, "b", m_unit)
+    node = next(node for node in checker.units if node.name == "f")
+    assert checker.node_module_names[node] == TEST_MODULE_NAME
 
 
 def test_assignment_class_init_member_access(tmp_path: Path):
@@ -325,6 +327,9 @@ a: Annotated[int, "unit:m"] = 1
         tmp_path,
     )
     check_unit(checker, "a", m_unit)
+    ((node, module_name),) = checker.node_module_names.items()
+    assert node.name == "a"
+    assert module_name == TEST_MODULE_NAME
 
 
 def test_addition(tmp_path: Path):
@@ -478,6 +483,8 @@ b = f(a)
     )
     check_unit(checker, "b", m_unit)
     check_unit(checker, "f", m_unit)
+    for node in checker.units:
+        assert checker.node_module_names[node] == TEST_MODULE_NAME
 
 
 def test_expression_method_args(tmp_path: Path):
@@ -1399,6 +1406,8 @@ b = A().a
         tmp_path,
     )
     check_unit(checker, "b", m_unit)
+    node = next(node for node in checker.units if node.name == "a")
+    assert checker.node_module_names[node] == TEST_MODULE_NAME
 
 
 def test_property_setter(tmp_path: Path):
