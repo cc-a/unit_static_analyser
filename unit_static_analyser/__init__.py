@@ -37,10 +37,12 @@ def run() -> None:
 
     print("Unit checking completed.")
     print(f"Errors: {checker.errors}")
-    
+
     if args.show_units:
         print("Units:")
         for key, val in checker.units.items():
             module_name = checker.node_module_names.get(key, "<unknown>")
             line_number = getattr(key, "line", "<no line>")
-            print(f"{key.fullname}: {val}  (Module: {module_name}, Line: {line_number})")
+            print(
+                f"{key.fullname}: {val}  (Module: {module_name}, Line: {line_number})"
+            )
