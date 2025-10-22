@@ -37,6 +37,9 @@ def run() -> None:
 
     print("Unit checking completed.")
     print(f"Errors: {checker.errors}")
+    print(f"Line number: {key.line}")
+    print(f"Module name: {checker.node_module_names[key]}")
+    
     if args.show_units:
         print("Units:")
         for key, val in checker.units.items():
