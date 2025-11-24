@@ -16,7 +16,7 @@ jobs:
         mypy-version: [1.0.0, 1.18.1]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Poetry
         run: pipx install poetry
