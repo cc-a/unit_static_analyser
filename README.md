@@ -13,7 +13,7 @@ from typing import Annotated
 distance: Annotated[int, "unit:m"] = 100
 time: Annotated[int, "unit:s"] = 20
 speed = distance / time  # Computes units as m/s
-distance + time # disallowed
+distance + time  # disallowed
 ```
 
 Using `typing.Annotated` allows arbitrary metadata to be attached alongside type
@@ -85,8 +85,8 @@ When assigning a unit to a variable any expression that does not have a unit ass
 ```python
 a: Annotated[int, "unit:m"] = 1
 b: Annotated[float, "unit:m"] = 1 / 3
-c = np.ndarray([]) # c has no unit
-d: Annotated[np.ndarray, "unit:m"] = c # but d does
+c = np.ndarray([])  # c has no unit
+d: Annotated[np.ndarray, "unit:m"] = c  # but d does
 ```
 
 Once a variable has a unit assigned, it cannot be changed later:
@@ -109,7 +109,7 @@ b + c  # incompatible
 a * b  # ok, gives m^2
 a / c  # ok, gives m.s^-1
 a**2  #  ok, gives m^2
-(a / c)**-3 # ok, gives m^3.s^-3
+(a / c) ** -3  # ok, gives m^3.s^-3
 ```
 
 All operands must have a unit associated with them. In order to work with scalar
@@ -129,8 +129,10 @@ Function arguments and return types can be assigned units:
 ```python
 def f(a: Annotated[int, "unit:m"]) -> Annotated[int, "unit:m"]:
     return a
+
+
 a: Annotated[int, "unit:m"] = 1
-b = f(a) # b has unit of m
+b = f(a)  # b has unit of m
 ```
 
 Arguments passed to functions are checked for unit compatibility. Using the above
@@ -149,6 +151,7 @@ Both attributes and methods can be annotated with units:
 ```python
 class A:
     a: Annotated[int, "unit:m"] = 1
+
     def method(self, b: Annotated[int, "unit:s"]):
         self.b: Annotated[int, "unit:s"] = b
 ```
